@@ -1,0 +1,2425 @@
+<!DOCTYPE html>
+<!--
+  Slide Match - Version Log
+  v2.0 - STABLE BASELINE. Push-chain mechanic, per-tile cross-axis matching,
+         shuffle-remaining (free once/level then costs a life), Logs debug
+         button, watchdog against stuck animation locks, all known tileMap/
+         board aliasing bugs fixed.
+  v2.1 - Lives persist across levels. Heart icons. Red flash + board wiggle
+         on life loss.
+  v3.0 - Fireworks on level clear (6 then 1/sec), auto-reshuffle
+         with spin/blink animation when truly stuck, cycling Hint button,
+         unified rule: ANY non-matching slide reverts + costs a life (no
+         more free wall-stops), mid-drag matching (fires the instant a
+         match is reached, not just on release), full-screen win/lose
+         overlays, Highest Level tracking, tile color contrast fix (7 vs 3).
+         If future changes go sideways, v2.0 is still the safe fallback.
+  v3.1 - Match animation reworked: tiles grow, squish to a combined width,
+         and shrink away together instead of the old uniform bloat-and-pop.
+  v3.2 - Grow reduced to 10%. Squish no longer overlaps the two tiles —
+         each pulls back a quarter-tile-width so they end up flush
+         side-by-side before shrinking away.
+  v3.3 - Web line shrinks from center, gets thicker on recoil then thins
+         during the yank. Tile shrink converges to a shared vanish point.
+  v3.4 - Attempted center-shrink fix for the web line broke vertical matches
+         (line rendered off to the side) due to CSS transform composition
+         order being genuinely ambiguous when combining translate+rotate+scale.
+  v3.5 - Web line rebuilt as static-rotation wrapper + animated bar child,
+         fixing the vertical-match positioning bug for good.
+  v3.6 - Line thickness 4px->2px, vanishes at impact. Added impact ripple
+         wobble after the merge.
+  v3.7 - Recoil +10%, wobble scales around the merged tile's shared center.
+  v3.8 - Wobble intensity +50%. Line thickness flipped: thin latch, thick yank.
+  v3.9 - Fixed regulate-step bug (was 2 tile-widths, now correctly 1).
+         Sped up 20%.
+  v4.0 - Dropped the squash step. Sequence: squish -> regulate -> shrink.
+  v4.1 - Squish now actually moves both axes (40% shrink/grow).
+  v4.2 - Added cartoon smear during yank, calmed squish 20%.
+  v4.3 - Recoil fixed at 50% tile size, no longer distance-scaled.
+  v4.4 - Line 2->9. Shockwave ring added at impact, colored to the match.
+  v4.5 - Shockwave moved to 0.65 (wrong direction, still too late) and
+         sped to 0.3s.
+  v4.6 - Shockwave color bug fixed (read from stale board array). Timing
+         moved to 0.45.
+  v4.7 - Shockwave grown 2.5x, immediately too big.
+  v4.8 - Shockwave rebuilt as dotted ring, end scale trimmed.
+  v4.9 - Shockwave dots shrunk 50%.
+  v5.0 - Logs hidden but clickable, board restored to full size.
+  v5.1 - Added color-scheme:dark meta tag to fix browser auto-dark repainting.
+  v5.2 - Title screen wired in fully (first load, tab-return, post-loss).
+  v5.3 - Desktop breakpoint added for larger fine-pointer screens.
+  v5.4 - First pass at bomb tiles: 2 max, dark grey, red pulse, countdown.
+  v5.5 - Urgent pulse state, grow/blink/burst sequence, moves raised to 15.
+  v5.6 - Both bombs detonate together, 50-circle burst per bomb.
+  v5.7 - Fireball circles solid, growing 1%->200%. Dripping V rain on
+         Game Over. Bomb countdown temporarily 5 for debugging.
+  v5.8 - Fixed bomb double-tick bug, removed zigzag, moved V-drips behind text.
+  v5.9 - Logs unhidden, board re-shrunk for preview.
+  v6.0 - Fixed the actual bombExploding-stuck bug (reset per level + catch).
+  v6.1 - Bomb countdown is now a heuristic, not a fixed number:
+         counts non-empty tiles directly between the two bomb cells (or
+         the cheaper of two L-shaped routes if they don't share a row/
+         column), +1 grace move. NOT a real solver — doesn't account for
+         chain-pushes, existing matches elsewhere, or actual move
+         sequencing. Scoped deliberately narrow per request: only the
+         path between the two bombs matters, not the whole board.
+  v6.2 (current) - Grace bumped 1->3 (1 was brutal). Added a "Bomb Path"
+         debug button: highlights the current bomb pair plus whatever
+         obstacle tiles the countdown heuristic is actually counting,
+         and logs the exact path — so you can eyeball whether a given
+         countdown is fair instead of guessing.
+  v6.3 (current) - Grace padded again, 3->6 total.
+  v6.4 (current) - Grace walked back to +1 (6 made it trivial).
+  v6.5 (current) - Drag now cancels if released within 15% of the start
+         (was always committing fully once the axis locked, regardless of
+         where you let go). Bomb Path now logs the LIVE recomputed
+         obstacle count alongside the bomb's actual current countdown and
+         a pace verdict (ahead/on-pace/behind), instead of showing the
+         obstacle count in isolation with nothing to compare it against.
+  v6.6 (current) - Bomb Path fixed: was animating the `outline` shorthand
+         via WAAPI, which browsers handle inconsistently — switched to
+         outlineWidth directly. Also now highlights each obstacle's actual
+         match partner, not just the obstacle itself, so it shows what
+         move clears it instead of just where it is.
+  v6.7 (current) - Grace +1 -> +2. We're basically tuning by vibes at this point.
+  v6.8 (current) - Real bug fixed: bombs ticked at move-START, meaning a
+         move that WOULD clear the bomb pair still decremented (and could
+         detonate) before the match itself was ever evaluated. Moved the
+         tick to move-END instead — by then, a cleared bomb is already
+         gone from tileMap, so it simply doesn't get ticked. No more
+         dying to the exact move that saves you.
+  v6.9 (current) - Shuffle (manual and auto) now recalculates bomb
+         countdown from the new positions using the same heuristic
+         (obstacles + 2 grace), instead of silently reusing whatever
+         stale value was set back at level start.
+  v7.0 (current) - Bomb explosion could hang indefinitely if the grow
+         animation's .finished promise neither resolved NOR rejected
+         (watchdog would eventually reset animating, but not bombExploding
+         or the game-over screen — silent soft-lock). Added a 2s hard
+         timeout race so it always forces the outcome either way now.
+  v7.1 (current) - Grace +2 -> +3 (multiple "1 move short" reports).
+  v7.2 (current) - The v7.0 hang bug apparently still occurred (my internal
+         2s timeout never fired/logged before the 4s watchdog did — can't
+         fully explain why from code alone). Added a backstop: the
+         watchdog now also resets bombExploding, so a hung bomb sequence
+         at least retries on the next tick instead of being permanently
+         locked out. Not a real fix for the unknown root cause, but the
+         game can no longer get stuck forever because of it.
+  v7.3 (current) - Grace +3 -> +4.
+  v7.3 (current) - Grace +4 -> +5.
+  v7.4 (current) - Added a tiny debug "Restart" button, fixed bottom-left,
+         calls startLevel() to reroll a fresh board at the same level/lives
+         — for fast bomb-tuning speedruns without going through the title
+         screen or losing on purpose.
+  v7.4 (current) - Added a small debug "Restart" button, fixed bottom-left.
+         Just calls startLevel() — fresh board, same level, same lives.
+         For fast retesting without going through a real game-over.
+  v7.5 (current) - Successfully defusing bombs (normal match, not a real
+         detonation) now puffs 8 grey smoke circles that drift and fizzle
+         out over 0.8s instead of the usual colored shockwave.
+  v7.6 (current) - Real bug: isBombMatch read board[r][c], which is
+         already nulled by finalizeChainShift before doMatch runs on
+         push-based matches — so smoke only ever fired for tap matches.
+         Reads off the element's rendered color now instead, same fix
+         pattern as the earlier shockwave-color bug.
+  v7.7 (current) - Smoke was replacing the shockwave instead of adding to
+         it (if/else instead of both). Now both fire together for bomb
+         matches. Smoke sizing was already independent of tile size, no
+         change needed there.
+  v7.8 (current) - THE actual smoke bug: comparing mover.style.background
+         to a literal hex string, which browsers almost certainly
+         normalize on read-back (e.g. to rgb()), making the check always
+         false. Switched to checking the .bomb-tile class instead, same
+         reliable method used everywhere else. Smoke duration bumped to
+         a full 1s per request.
+  v7.9 (current) - Congrats on level 8. Added a cartoon fuse to bomb
+         tiles: a brown wick sticking out the top-right corner with a
+         spinning "*" spark at the tip. Had to move the countdown number
+         into its own span first — tickBombs was setting el.textContent
+         directly, which would've wiped out the wick/spark every single
+         tick.
+  v8.0 (current) - Spark nudged ~10% right to sit at the wick's tip.
+         Wick fattened (4px->6px) and lightened 20%.
+  v8.1 (current) - Spark nudged another 20% right. Smoke puffs now stagger
+         over 0.6s (was ~150ms) so it keeps emitting instead of one burst.
+  v9.0 (current) - Hard Mode system: bombs now only spawn on every 3rd
+         level (was every level). Clearing 3 levels in a row with zero
+         life loss earns a Bomb Diffuser — a 💣 button, bottom-left,
+         hollow/grey when unavailable, blue-glowing when charged. Using
+         it instantly clears both current bomb tiles (they only match
+         each other, so removing just one would strand the other
+         forever) with a smoke-puff effect, no matching required.
+  v9.1 (current) - Hard Mode every 4th level instead of 3rd (matches the
+         3-level diffuser streak better — every 3rd meant you'd basically
+         always have one waiting).
+  v9.2 (current) - Dragging a tile straight into an adjacent same-value
+         tile now matches that specific pair directly, instead of falling
+         into the push-chain logic (which would've treated two touching
+         same-number tiles as one rigid block to shove, not a match).
+         Lets you pick which tile in a cluster (e.g. a 2x2 block of the
+         same number) to pair with, instead of always getting whichever
+         one tap's fixed up/down/left/right scan order happens to find
+         first.
+  v9.3 (current) - Reworked the diffuser into a Tile Killer: 🔫 icon, tap
+         to arm (pulses red while armed), then tap any tile to kill it
+         plus whichever same-value tile is physically nearest (straight
+         Euclidean distance, no line-of-sight required — it's a forced
+         kill, not a real match). Open-ended for future obstacles, not
+         bomb-specific anymore. Same 3-perfect-levels earn condition.
+         Also nudged the spark further right again.
+  v9.4 (current) - Hard levels now open with a red "Hard Level" banner —
+         grows in, holds 1s, shrinks out. Gun button resized to a real
+         feature sitting next to Hint (was a tiny corner icon), Shuffle
+         stays the small debug button in the corner.
+  v9.5 (current) - Gun button now shows a 🔒 + countdown badge (levels
+         until unlock, 3 down to 0) while locked, hidden once a charge is
+         available. A mistake pulses the lock red and resets the
+         countdown immediately (not waiting for level end anymore).
+  v9.6 (current) - Found the actual Restart bug: there were literally TWO
+         #btn-debug-restart buttons in the markup (one malformed, jammed
+         inline before the HUD div) plus a duplicate CSS block and a
+         duplicate event listener — classic leftover from a bad edit.
+         Cleaned up to one of each. Removed the Bomb Path and manual
+         Shuffle buttons/handlers (auto-reshuffle still works fine on its
+         own). Added a "Solve" debug button next to Restart: clears ~90%
+         of remaining tiles instantly in matching pairs, for fast testing.
+  v9.7 (current) - Tile Killer presentation overhaul: arming now outlines
+         every tile blue; gun button is dark blue by default, pale blue
+         (pulsing) while armed; cancel by tapping the gun again. Firing
+         clears the outlines, then a laser beam shoots from the gun to
+         tile A, pauses 0.2s, then to tile B, before the actual kill
+         plays out. Lock icon and countdown number both enlarged.
+  v9.8 (current) - Beam 40% thicker. Shot tiles violently wiggle (bigger
+         rotation + scale punch) as each laser lands. Gun button now stays
+         visually "armed" for an extra 0.8s after firing completes before
+         dimming to its real state.
+  v9.9 (current) - Added "Tap a tile to blast away" instruction text below
+         the action bar, shown while the gun's armed. Spark nudged right
+         again (running total of nudges is getting a little silly).
+  v10.0 (current) - Hard Level banner now has a dark dimming backdrop
+         behind it, fading in/out in sync with the text.
+  v10.1 (current) - Bomb numbers now red, pulsing scale+white flash on
+         every countdown tick. Regular tile numbers at 50% opacity —
+         readability tradeoff acknowledged, done anyway per request.
+  v10.2 (current) - Consolidated all debug tools under one "Debug" toggle
+         button (bottom-left): Restart, Solve, Logs (moved out of the top
+         HUD), and a new "Preview Rescale" toggle that switches between
+         full-size and the 20%-shrunk preview-window sizing — off by
+         default, so the game runs full-size unless you explicitly turn
+         it on.
+  v10.3 (current) - Added a round pale-purple "?" button next to Hint.
+         Opens a native HTML/CSS tutorial diagram (not an embedded image —
+         built from divs/grid, same technique as the title screen's demo
+         tiles) matching the mockup: row/column match example on top, a
+         push-through-obstacles example below with an arrow. Tap anywhere
+         to close.
+  v10.4 (current) - Real bug (not a rescaling issue): the tutorial's
+         connecting lines used pixel offsets copied straight from the
+         padded Python mockup instead of recalculated for the padding-
+         free HTML grid, so the vertical line ran between the two 2s
+         instead of connecting the two 4s. Fixed the actual coordinates.
+         Also added a scale-down safety net for genuinely narrow screens.
+  v10.5 (current) - Help button moved to the far-left corner of the
+         action bar (was crammed in with Hint/Gun). Debug button darkened
+         near-invisible — it's yours, not the family's.
+  v10.6 (current) - Debug button now hollow (transparent fill, outline+text only).
+  v10.7 (current) - Real bug: `animating` never got reset to false after a
+         bomb explosion finished (neither success nor error path cleared
+         it). Fixed both. Honest caveat: I can't 100% confirm this is the
+         exact mechanism behind the reported "explodes again on next
+         attempt" bug, but it's a genuine leak regardless and the most
+         plausible suspect — watch for it recurring and send logs if so.
+  v10.8 (current) - Added italic, very pale blue "Clear the Bomb Tiles
+         before they countdown to 0!" text below the action bar, shown
+         only on Hard Mode levels.
+  v10.9 (current) - Cleanup pass: removed 5 fully dead functions
+         (showBombPath, getObstacleCellsBetween — Bomb Path button was
+         removed from the UI a while back but the code never got cleaned
+         up; doMismatch, flipMove — superseded by revertChainToOrigin/
+         commitDrag long ago; shuffleRemaining — the manual Shuffle
+         button was removed too) plus the now-orphaned freeShuffleUsed
+         variable and its resets. All confirmed zero-caller via a real
+         audit before removal, not guesswork.
+  v11.0 (current) - Added "Slide Match" title above the HUD, with a gap
+         before the board. Added a Home button (from the hub snippet)
+         bottom-left, positioned beside the Debug button rather than
+         stacked above it — the debug panel expands into that exact spot
+         when opened, so stacking would've caused an overlap.
+  v11.1 (current) - Board/action-bar width now bounded by viewport HEIGHT
+         too (min(92vw, 50vh, 420px)), not just width — so short/landscape
+         screens auto-shrink the board instead of letting it overflow
+         vertically. The 50vh figure accounts for the board's 6:8 aspect
+         ratio plus title/HUD/action-bar chrome eating into vertical
+         space; first attempt at this used 78vh, which was backwards
+         math and would've made short screens worse, not better — caught
+         and corrected before shipping.
+  v11.2 (current) - Replaced the guesswork sizing with real Height-First
+         Auto-Scaling (per Project Knowledge): measures actual chrome
+         height (title/HUD/action-bar/instruction-text margins included)
+         at runtime and solves for board width via the grid's own
+         aspect-ratio, instead of a hardcoded vw/vh guess. Removed the
+         now-superseded desktop media query and the v11.1 vh-based rule
+         entirely — this replaces both. Preview Rescale toggle untouched,
+         still works via !important override. Runs on load, resize, and
+         orientation change, rAF-batched.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>Slide Match</title>
+<style>
+  :root{
+    --bg: #101820;
+    --cell-empty: #16261f;
+    --tile-bg-border: rgba(0,0,0,0.35);
+    --gap: 4px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin:0; padding:0; height:100%;
+    background:var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color:#eee;
+    overscroll-behavior:none;
+    touch-action:none;
+    user-select:none;
+  }
+  #app{
+    display:flex; flex-direction:column; align-items:center;
+    min-height:100%;
+    padding: 16px 10px 24px;
+  }
+  #game-title{
+    font-size:28px;
+    font-weight:900;
+    color:#3a8bff;
+    text-shadow:0 2px 0 #163a73;
+    letter-spacing:1px;
+    margin-bottom:20px;
+  }
+  #hud{
+    width:var(--board-max-w, 420px); max-width:none;
+    display:flex; justify-content:space-between; align-items:center;
+    margin:0 auto 14px;
+  }
+  #hud-left{
+    display:flex; align-items:center; gap:10px;
+  }
+  #btn-diffuser{
+    font-size:24px;
+    padding:10px 28px;
+    border-radius:10px;
+    border:2px solid #222;
+    background:#0a0a0a;
+    color:#333;
+    cursor:pointer;
+    filter: grayscale(1) brightness(0.6);
+    opacity:0.5;
+  }
+  #btn-diffuser.available{
+    border-color:#1a4a7a;
+    background:#0a1c30;
+    box-shadow:0 0 8px rgba(26,74,122,0.7);
+    filter:none;
+    opacity:1;
+  }
+  #btn-diffuser.armed{
+    border-color:#aee0ff;
+    background:#2a6fb0;
+    box-shadow:0 0 16px rgba(174,224,255,0.95);
+    animation: gunArmedPulse 0.6s ease-in-out infinite;
+  }
+  @keyframes gunArmedPulse{
+    0%, 100% { box-shadow:0 0 10px rgba(174,224,255,0.7); transform:scale(1); }
+    50%      { box-shadow:0 0 22px rgba(174,224,255,1); transform:scale(1.06); }
+  }
+  #btn-diffuser:active{ transform:scale(0.92); }
+  #gun-wrap{ position:relative; display:inline-block; }
+  #gun-lock{
+    position:absolute;
+    top:-14px; right:-14px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:26px;
+    pointer-events:none;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
+  }
+  #gun-lock-count{
+    position:absolute;
+    font-size:15px;
+    font-weight:900;
+    color:#fff;
+    top:5px;
+    text-shadow:0 0 3px #000, 0 0 3px #000;
+  }
+  #gun-wrap.unlocked #gun-lock{ display:none; }
+  #gun-lock.pulse-mistake{ animation: lockMistakePulse 0.5s ease-in-out 2; }
+  @keyframes lockMistakePulse{
+    0%, 100% { filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform:scale(1); }
+    50% { filter: drop-shadow(0 0 6px #ff2b2b); transform:scale(1.3); }
+  }
+  .tile.killer-highlight{
+    outline: 3px solid #3a9bff;
+    outline-offset: -2px;
+  }
+  #btn-hint{
+    font-size:16px;
+    font-weight:700;
+    padding:12px 32px;
+    border-radius:10px;
+    border:1px solid #7a5f1f;
+    background:#a07a20;
+    color:#fff;
+    cursor:pointer;
+  }
+  #btn-hint:active{ background:#c0942a; }
+  #action-row{
+    position:relative;
+    width:var(--board-max-w, 420px);
+    margin:14px auto 0;
+    display:flex;
+    flex-direction:column;
+  }
+  #action-bar{
+    display:flex;
+    justify-content:center;
+    gap:12px;
+    width:100%;
+    min-height:44px;
+  }
+  #killer-instructions{
+    margin-top:8px;
+    font-size:13px;
+    font-weight:700;
+    color:#aee0ff;
+    text-align:center;
+    visibility:hidden;
+    opacity:0;
+    transition:opacity 0.2s;
+  }
+  #killer-instructions.show{ visibility:visible; opacity:1; }
+  #hard-mode-hint{
+    margin-top:6px;
+    font-size:12px;
+    font-style:italic;
+    color:#d5eeff;
+    text-align:center;
+    visibility:hidden;
+    opacity:0;
+  }
+  #hard-mode-hint.show{ visibility:visible; opacity:1; }
+  .bomb-number{
+    display:inline-block;
+  }
+  .bomb-tile{
+    animation: bombPulse 1.2s ease-in-out infinite;
+  }
+  .bomb-wick{
+    position:absolute;
+    top:-9px; right:6px;
+    width:16px; height:6px;
+    background:#89694f;
+    border-radius:3px;
+    transform: rotate(-35deg);
+    transform-origin: right center;
+    pointer-events:none;
+    z-index:3;
+  }
+  .bomb-spark{
+    position:absolute;
+    top:-18px; right:4px;
+    font-size:14px;
+    font-weight:900;
+    color:#ffcc33;
+    text-shadow:0 0 4px #ff8800, 0 0 8px #ff3300;
+    pointer-events:none;
+    z-index:3;
+    animation: sparkSpin 0.4s linear infinite;
+  }
+  @keyframes sparkSpin{
+    from{ transform: rotate(0deg); }
+    to{ transform: rotate(360deg); }
+  }
+  .bomb-tile.urgent{
+    animation: bombPulseUrgent 0.45s ease-in-out infinite;
+  }
+  @keyframes bombPulseUrgent{
+    0%, 100% { box-shadow: 0 0 0 2px rgba(255,40,40,0.4); transform: scale(1); }
+    50%      { box-shadow: 0 0 16px 6px rgba(255,40,40,1); transform: scale(1.1); }
+  }
+  @keyframes bombPulse{
+    0%, 100% { box-shadow: 0 0 0 2px rgba(255,40,40,0.35); }
+    50%      { box-shadow: 0 0 10px 4px rgba(255,40,40,0.9); }
+  }
+  #reshuffle-text{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:clamp(22px, 8vw, 34px);
+    font-weight:900;
+    color:#3b9bff;
+    text-shadow:0 0 10px rgba(59,155,255,0.6);
+    pointer-events:none;
+    opacity:0;
+    z-index:15;
+    text-align:center;
+  }
+  #hard-level-dim{
+    position:absolute; inset:0;
+    background:rgba(0,0,0,0.7);
+    pointer-events:none;
+    opacity:0;
+    z-index:15;
+  }
+  #hard-level-text{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:clamp(24px, 9vw, 38px);
+    font-weight:900;
+    color:#ff2b2b;
+    text-shadow:0 0 12px rgba(255,43,43,0.7);
+    pointer-events:none;
+    opacity:0;
+    z-index:16;
+    text-align:center;
+  }
+  #btn-hub{
+    align-self:flex-start;
+    margin-top:8px;
+    font-size:12px;
+    font-weight:700;
+    padding:6px 12px;
+    border-radius:8px;
+    border:1px solid #9d6fe0;
+    background:transparent;
+    color:#9d6fe0;
+    text-decoration:none;
+    white-space:nowrap;
+    cursor:pointer;
+  }
+  #btn-hub:active{ background:rgba(157,111,224,0.15); }
+  #btn-debug-toggle{
+    position:fixed;
+    left:6px; bottom:6px;
+    z-index:300;
+    font-size:10px;
+    font-weight:700;
+    padding:3px 8px;
+    border-radius:5px;
+    border:1px solid #2a2a2a;
+    background:transparent;
+    color:#3a3a3a;
+    cursor:pointer;
+  }
+  #btn-debug-toggle:active{ background:#181818; }
+  #debug-panel{
+    position:fixed;
+    left:6px; bottom:32px;
+    z-index:300;
+    display:none;
+    flex-direction:column;
+    gap:4px;
+  }
+  #debug-panel.show{ display:flex; }
+  #debug-panel button{
+    font-size:10px;
+    font-weight:700;
+    padding:3px 8px;
+    border-radius:5px;
+    border:1px solid #444;
+    background:#1b2830;
+    color:#888;
+    cursor:pointer;
+    text-align:left;
+  }
+  #debug-panel button:active{ background:#243440; }
+  #btn-logs{ border-color:#7a1f1f !important; background:#a02020 !important; color:#fff !important; }
+  #level{
+    font-size:18px; font-weight:700; letter-spacing:0.5px;
+  }
+  #lives{
+    font-size:20px; font-weight:800; letter-spacing:4px;
+  }
+  #lives span{
+    color:#e02020;
+    transition: opacity 0.2s, color 0.2s;
+  }
+  #lives span.lost{
+    color:#3a3a3a;
+    opacity:0.6;
+  }
+  #board-wrap{
+    position:relative;
+    width:var(--board-max-w, 420px);
+  }
+  #grid{
+    position:relative;
+    display:grid;
+    grid-template-columns: repeat(6, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    gap: var(--gap);
+    width:100%;
+    aspect-ratio: 6 / 8;
+  }
+  .cell{
+    background:var(--cell-empty);
+    border-radius:6px;
+  }
+  .tile{
+    position:relative;
+    border-radius:6px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:clamp(16px, 5.2vw, 26px);
+    font-weight:800;
+    border: 2px solid var(--tile-bg-border);
+    cursor:grab;
+    touch-action:none;
+    will-change:transform;
+    z-index:2;
+  }
+  .match-line{
+    position:absolute;
+    left:0; top:0;
+    height:3px;
+    background:#ffffff;
+    z-index:1;
+    pointer-events:none;
+    border-radius:2px;
+  }
+  .match-line-wrap{
+    position:absolute;
+    width:0; height:0;
+    pointer-events:none;
+    z-index:1;
+  }
+  #ouch-flash{
+    position:absolute; inset:0;
+    background:#ff0000;
+    opacity:0;
+    pointer-events:none;
+    border-radius:8px;
+    z-index:5;
+  }
+  .overlay{
+    position:fixed; inset:0;
+    background:rgba(0,0,0,0.88);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px;
+    z-index:100;
+    visibility:hidden;
+    opacity:0;
+    transition:opacity 0.2s;
+  }
+  .overlay.show{ visibility:visible; opacity:1; }
+  .overlay h2{ margin:0; font-size:28px; letter-spacing:1px; position:relative; z-index:1; }
+  .overlay button{
+    font-size:16px;
+    font-weight:700;
+    padding:10px 22px;
+    border-radius:8px;
+    border:none;
+    background:#3a8bff;
+    color:white;
+    cursor:pointer;
+    position:relative; z-index:1;
+  }
+  .overlay.gameover h2{ color:#ff4d4d; }
+  .overlay.win h2{
+    color:#2ecc71;
+    font-weight:900;
+    font-size:34px;
+    text-shadow:0 0 10px rgba(46,204,113,0.6), 0 2px 0 #0a3d1f;
+  }
+  #title-screen{
+    position:fixed; inset:0;
+    background:#101820;
+    z-index:200;
+    display:none;
+    flex-direction:column; align-items:center;
+    padding-top:8vh;
+    gap:36px;
+    visibility:hidden; opacity:0;
+    transition:opacity 0.2s;
+  }
+  #title-screen.show{ display:flex; visibility:visible; opacity:1; }
+  #title-wrap{ perspective:600px; margin-left:46px; }
+  #title-text{
+    transform: rotateY(-48deg);
+    transform-origin: center center;
+    text-align: left;
+    font-weight: 900;
+    color: #2e6fdb;
+    text-shadow: 0 3px 0 #163a73, 0 6px 10px rgba(0,0,0,0.5);
+    line-height: 0.95;
+    letter-spacing: 1px;
+    font-size: clamp(60px, 18vw, 101px);
+  }
+  #title-text div:nth-child(2){ margin-top:4px; }
+  #help-row{
+    width:var(--board-max-w, 420px);
+    margin:0 auto;
+    display:flex;
+    justify-content:flex-end;
+  }
+  #btn-help{
+    width:26px; height:26px;
+    border-radius:50%;
+    font-size:14px;
+    font-weight:900;
+    border:2px solid #9d6fe0;
+    background:transparent;
+    color:#9d6fe0;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    padding:0;
+    margin-bottom:4px;
+  }
+  #btn-help:active{ background:rgba(157,111,224,0.15); }
+  #tutorial-overlay{
+    position:fixed; inset:0;
+    background:rgba(0,0,0,0.9);
+    z-index:400;
+    display:none;
+    align-items:center; justify-content:center;
+    cursor:pointer;
+  }
+  #tutorial-overlay.show{ display:flex; }
+  #tutorial-content{
+    display:flex; flex-direction:column; align-items:center; gap:14px;
+    padding:20px;
+  }
+  @media (max-width: 380px){
+    #tutorial-content{ transform:scale(0.8); }
+  }
+  #tutorial-caption-top, #tutorial-caption-bottom{
+    color:#c9a9e0;
+    font-weight:800;
+    font-size:16px;
+    text-align:center;
+    max-width:280px;
+  }
+  #tutorial-grid{
+    position:relative;
+    display:grid;
+    grid-template-columns: repeat(4, 50px);
+    grid-template-rows: repeat(6, 50px);
+    gap:0;
+    background:#101820;
+  }
+  .tut-cell{ background:#16261f; margin:2px; border-radius:4px; }
+  .tut-tile{
+    margin:2px; border-radius:4px;
+    display:flex; align-items:center; justify-content:center;
+    color:#fff; font-weight:800; font-size:20px;
+  }
+  .tut-line{ position:absolute; background:#fff; }
+  #tutorial-arrow{
+    color:#c9a9e0;
+    font-size:26px;
+    font-weight:900;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #title-screen .demo-pair{ position:absolute; pointer-events:none; }
+  #title-screen .demo-tile{
+    position:absolute; width:46px; height:46px;
+    border-radius:6px; border:2px solid rgba(0,0,0,0.35);
+  }
+  #title-screen .demo-line{ position:absolute; background:#ffffff; opacity:0.85; }
+  #pair-vertical{ top:0; left:calc(10% + 46px); }
+  #pair-vertical .demo-tile.a{ top:2vh; left:0; background:#f1c40f; }
+  #pair-vertical .demo-tile.b{ top:82vh; left:0; background:#f1c40f; }
+  #pair-vertical .demo-line{ top:calc(2vh + 46px); left:22px; width:2px; height:calc(80vh - 46px); }
+  #pair-horizontal{ top:46%; left:4%; right:4%; }
+  #pair-horizontal .demo-tile.a{ top:0; left:0; background:#c0392b; }
+  #pair-horizontal .demo-tile.b{ top:0; right:0; background:#c0392b; }
+  #pair-horizontal .demo-line{ top:22px; left:46px; right:46px; height:2px; }
+  #btn-continue{
+    position:relative; z-index:2;
+    font-size:22px; font-weight:800;
+    padding:16px 56px;
+    border-radius:12px; border:none;
+    background:#1f8a5f; color:#eafff2;
+    letter-spacing:2px; cursor:pointer;
+    box-shadow:0 4px 0 #145c3e, 0 8px 16px rgba(0,0,0,0.4);
+  }
+  #highest-level-text{
+    position:relative; z-index:1;
+    font-size:16px;
+    color:#ccc;
+    margin-top:-8px;
+  }
+  body.preview-shrink #board-wrap,
+  body.preview-shrink #action-bar,
+  body.preview-shrink #action-row,
+  body.preview-shrink #help-row{
+    width:min(73.6vw, 336px) !important;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="game-title">Slide Match</div>
+  <div id="help-row">
+    <button id="btn-help">?</button>
+  </div>
+  <div id="hud">
+    <div id="hud-left">
+      <div id="level">Level 1</div>
+    </div>
+    <div id="lives"></div>
+  </div>
+  <div id="board-wrap">
+    <div id="grid"></div>
+    <div id="ouch-flash"></div>
+    <div id="reshuffle-text">RESHUFFLE!</div>
+    <div id="hard-level-dim"></div>
+    <div id="hard-level-text">Hard Level</div>
+  </div>
+  <div id="action-row">
+    <div id="action-bar">
+      <button id="btn-hint">Hint</button>
+      <div id="gun-wrap">
+        <button id="btn-diffuser">🔫</button>
+        <div id="gun-lock">🔒<span id="gun-lock-count">3</span></div>
+      </div>
+    </div>
+    <a id="btn-hub" href="../">Home</a>
+  </div>
+  <div id="killer-instructions">Tap a tile to blast away</div>
+  <div id="hard-mode-hint">Clear the Bomb Tiles before they countdown to 0!</div>
+  <div class="overlay gameover" id="overlay-lose">
+    <h2>GAME OVER</h2>
+    <div id="highest-level-text"></div>
+    <button id="btn-restart">Restart</button>
+  </div>
+  <div class="overlay win" id="overlay-win">
+    <h2>Level Cleared!</h2>
+    <button id="btn-next">Next Level</button>
+  </div>
+  <div id="tutorial-overlay">
+    <div id="tutorial-content">
+      <div id="tutorial-caption-top">Slide tiles to match by row or column</div>
+      <div id="tutorial-grid">
+        <div class="tut-cell" style="grid-row:1;grid-column:1;"></div>
+        <div class="tut-cell" style="grid-row:1;grid-column:2;"></div>
+        <div class="tut-tile" style="grid-row:1;grid-column:3;background:#f1c40f;">4</div>
+        <div class="tut-cell" style="grid-row:1;grid-column:4;"></div>
+        <div class="tut-cell" style="grid-row:2;grid-column:1;"></div>
+        <div class="tut-cell" style="grid-row:2;grid-column:2;"></div>
+        <div class="tut-cell" style="grid-row:2;grid-column:3;"></div>
+        <div class="tut-cell" style="grid-row:2;grid-column:4;"></div>
+        <div class="tut-tile" style="grid-row:3;grid-column:1;background:#3498db;">2</div>
+        <div class="tut-tile" style="grid-row:3;grid-column:2;background:#3498db;">2</div>
+        <div class="tut-cell" style="grid-row:3;grid-column:3;"></div>
+        <div class="tut-cell" style="grid-row:3;grid-column:4;"></div>
+        <div class="tut-cell" style="grid-row:4;grid-column:1;"></div>
+        <div class="tut-cell" style="grid-row:4;grid-column:2;"></div>
+        <div class="tut-tile" style="grid-row:4;grid-column:3;background:#f1c40f;">4</div>
+        <div class="tut-cell" style="grid-row:4;grid-column:4;"></div>
+        <div id="tutorial-arrow" style="grid-row:5;grid-column:1;">➜</div>
+        <div class="tut-tile" style="grid-row:5;grid-column:2;background:#2ecc71;">3</div>
+        <div class="tut-tile" style="grid-row:5;grid-column:3;background:#e74c3c;">1</div>
+        <div class="tut-tile" style="grid-row:5;grid-column:4;background:#00b8d9;">7</div>
+        <div class="tut-cell" style="grid-row:6;grid-column:1;"></div>
+        <div class="tut-tile" style="grid-row:6;grid-column:2;background:#2ecc71;">3</div>
+        <div class="tut-cell" style="grid-row:6;grid-column:3;"></div>
+        <div class="tut-tile" style="grid-row:6;grid-column:4;background:#e67e22;">6</div>
+        <div class="tut-line" style="left:124px; top:25px; width:2px; height:150px;"></div>
+        <div class="tut-line" style="left:25px; top:124px; width:50px; height:2px;"></div>
+        <div class="tut-line" style="left:74px; top:225px; width:2px; height:50px;"></div>
+      </div>
+      <div id="tutorial-caption-bottom">You can push a line of tiles to match</div>
+    </div>
+  </div>
+  <div id="title-screen" class="show">
+    <div class="demo-pair" id="pair-vertical">
+      <div class="demo-tile a"></div>
+      <div class="demo-line"></div>
+      <div class="demo-tile b"></div>
+    </div>
+    <div class="demo-pair" id="pair-horizontal">
+      <div class="demo-tile a"></div>
+      <div class="demo-line"></div>
+      <div class="demo-tile b"></div>
+    </div>
+    <div id="title-wrap">
+      <div id="title-text">
+        <div>SLIDE</div>
+        <div>MATCH!</div>
+      </div>
+    </div>
+    <button id="btn-continue">PLAY</button>
+  </div>
+  <button id="btn-debug-toggle">Debug</button>
+  <div id="debug-panel">
+    <button id="btn-debug-restart">Restart</button>
+    <button id="btn-debug-solve">Solve</button>
+    <button id="btn-logs">Logs</button>
+    <button id="btn-preview-rescale">Preview Rescale: Off</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const ROWS = 8, COLS = 6;
+  const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const D = (ms)=> REDUCED ? Math.round(ms*0.4) : ms;
+
+  const PALETTE = {
+    1:'#e74c3c', 2:'#3498db', 3:'#2ecc71', 4:'#f1c40f', 5:'#9b59b6',
+    6:'#e67e22', 7:'#00b8d9', 8:'#e91e63', 9:'#8d6e63', 10:'#607d8b'
+  };
+  const DIRS = { up:[-1,0], down:[1,0], left:[0,-1], right:[0,1] };
+
+  const gridEl = document.getElementById('grid');
+  const levelEl = document.getElementById('level');
+  const livesEl = document.getElementById('lives');
+  const overlayLose = document.getElementById('overlay-lose');
+  const overlayWin = document.getElementById('overlay-win');
+  const boardWrap = document.getElementById('board-wrap');
+
+  let board, tileMap, cellMap, lives, level, animating, remaining, animatingSince, highestLevel;
+  let levelHadMistake = false, perfectStreak = 0, diffusersAvailable = 0;
+  let moveLog = [];
+
+  function logMove(desc){
+    const t = new Date().toTimeString().slice(0,8);
+    moveLog.push(`[${t}] ${desc}`);
+    if(moveLog.length > 40) moveLog.shift();
+  }
+
+  function safeSetTransform(r,c,value){
+    const e = tileMap[r+','+c];
+    if(e) e.style.transform = value;
+    else logMove(`WARN: missing tile at (${r},${c}) during transform update`);
+  }
+
+  function boardSnapshot(){
+    return board.map(row => row.map(v => v==null ? ' .' : String(v).padStart(2)).join(' ')).join('\n');
+  }
+
+  function setAnimating(v){
+    const wasOn = animating;
+    animating = v;
+    animatingSince = v ? Date.now() : null;
+    if(!v && wasOn) tickBombs();
+    if(!v) updateShuffleHint();
+  }
+
+  function tickBombs(){
+    const bombEls = Object.values(tileMap).filter(el=> el.classList.contains('bomb-tile'));
+    let triggered = false;
+    bombEls.forEach(el=>{
+      const n = parseInt(el.dataset.bombCount) - 1;
+      el.dataset.bombCount = n;
+      const numSpan = el.querySelector('.bomb-number');
+      if(numSpan){
+        numSpan.textContent = Math.max(n, 0);
+        numSpan.animate([
+          { transform:'scale(1)',   color:'#ff3b3b', offset:0 },
+          { transform:'scale(1.6)', color:'#ffffff', offset:0.4 },
+          { transform:'scale(1)',   color:'#ff3b3b', offset:1 }
+        ], { duration: D(350), easing:'ease-out' });
+      }
+      if(n <= 3 && n > 0) el.classList.add('urgent');
+      if(n <= 0) triggered = true;
+    });
+    if(triggered) triggerBombExplosion(bombEls);
+  }
+
+  let bombExploding = false;
+
+  function triggerBombExplosion(bombEls){
+    if(bombExploding) return;
+    bombExploding = true;
+    animating = true; animatingSince = Date.now(); // freeze input directly (setAnimating would re-trigger tickBombs)
+    logMove(`BOOM sequence started (${bombEls.length} bomb(s))`);
+
+    const wrapRect = boardWrap.getBoundingClientRect();
+    const targets = bombEls.map(el=>{
+      el.classList.remove('urgent');
+      const rect = el.getBoundingClientRect();
+      return { el, x: rect.left+rect.width/2-wrapRect.left, y: rect.top+rect.height/2-wrapRect.top };
+    });
+
+    // frantic blink + grow 15% over 0.8s, all bombs together
+    const growAnims = targets.map(t => t.el.animate([
+      { transform:'scale(1)',    filter:'brightness(1)',   offset:0 },
+      { transform:'scale(1.03)', filter:'brightness(1.8)', offset:0.2 },
+      { transform:'scale(1.0)',  filter:'brightness(1)',   offset:0.4 },
+      { transform:'scale(1.08)', filter:'brightness(2)',   offset:0.6 },
+      { transform:'scale(1.02)', filter:'brightness(1)',   offset:0.8 },
+      { transform:'scale(1.15)', filter:'brightness(2.2)', offset:1 }
+    ], { duration: 800, easing:'ease-in', fill:'forwards' }));
+
+    const timeout = (ms)=> new Promise((_,reject)=> setTimeout(()=> reject(new Error('animation timed out')), ms));
+
+    Promise.race([
+      Promise.all(growAnims.map(a=>a.finished)),
+      timeout(2000)
+    ]).then(()=>{
+      targets.forEach(t=>{
+        t.el.animate([
+          { transform:'scale(1.15)', opacity:1 },
+          { transform:'scale(1.7)', opacity:0 }
+        ], { duration:150, easing:'ease-out', fill:'forwards' });
+
+        spawnBoardShockwave(t.x, t.y);
+        spawnBombBurst(t.x, t.y);
+      });
+
+      setTimeout(()=>{
+        targets.forEach(t=> t.el.remove());
+        lives = 0;
+        renderLives();
+        document.getElementById('highest-level-text').textContent = `Highest Level: ${highestLevel}`;
+        overlayLose.classList.add('show');
+        startVDrip();
+        animating = false; animatingSince = null;
+      }, 1000);
+    }).catch((err)=>{
+      // if the animation chain got interrupted for any reason, don't leave
+      // bombExploding stuck true forever — just force the game-over outcome
+      logMove(`ERROR during bomb explosion: ${err.message}`);
+      targets.forEach(t=>{ if(t.el.isConnected) t.el.remove(); });
+      lives = 0;
+      renderLives();
+      document.getElementById('highest-level-text').textContent = `Highest Level: ${highestLevel}`;
+      overlayLose.classList.add('show');
+      startVDrip();
+      animating = false; animatingSince = null;
+    });
+  }
+
+  // bright orange ring expanding out to cover the whole board
+  function spawnBoardShockwave(x,y){
+    const rect = boardWrap.getBoundingClientRect();
+    const maxDim = Math.hypot(rect.width, rect.height) * 1.3;
+    const ring = document.createElement('div');
+    ring.style.position = 'absolute';
+    ring.style.left = x+'px';
+    ring.style.top = y+'px';
+    ring.style.width = '20px';
+    ring.style.height = '20px';
+    ring.style.marginLeft = '-10px';
+    ring.style.marginTop = '-10px';
+    ring.style.borderRadius = '50%';
+    ring.style.border = '6px solid #ff8c00';
+    ring.style.pointerEvents = 'none';
+    ring.style.zIndex = '150';
+    boardWrap.appendChild(ring);
+
+    const scaleEnd = maxDim/20;
+    const anim = ring.animate([
+      { transform:'scale(1)', opacity:1 },
+      { transform:`scale(${scaleEnd})`, opacity:0 }
+    ], { duration:600, easing:'ease-out' });
+    anim.onfinish = ()=> ring.remove();
+  }
+
+  // 50 pale orange/yellow fireball circles per bomb, spreading out to cover the board
+  function spawnBombBurst(x,y){
+    const colors = ['#ffb366', '#fff2a8']; // ~50% paler orange / yellow
+    const rect = boardWrap.getBoundingClientRect();
+    const maxDist = Math.hypot(rect.width, rect.height) * 0.65;
+    const count = 50;
+    for(let i=0;i<count;i++){
+      const angle = Math.random()*Math.PI*2;
+      const dist = 30 + Math.random()*maxDist;
+      const dx = Math.cos(angle)*dist, dy = Math.sin(angle)*dist;
+      const size = 30 + Math.random()*70;
+      const color = colors[Math.floor(Math.random()*colors.length)];
+      const delay = Math.random()*180;
+
+      const ball = document.createElement('div');
+      ball.style.position = 'absolute';
+      ball.style.left = x+'px';
+      ball.style.top = y+'px';
+      ball.style.width = size+'px';
+      ball.style.height = size+'px';
+      ball.style.marginLeft = (-size/2)+'px';
+      ball.style.marginTop = (-size/2)+'px';
+      ball.style.borderRadius = '50%';
+      ball.style.background = color;
+      ball.style.border = `4px solid ${color}`;
+      ball.style.pointerEvents = 'none';
+      ball.style.zIndex = '150';
+      ball.style.opacity = '0';
+      boardWrap.appendChild(ball);
+
+      setTimeout(()=>{
+        const anim = ball.animate([
+          { transform:'translate(0,0) scale(0.01)', opacity:1, offset:0 },
+          { transform:`translate(${dx}px,${dy}px) scale(2)`, opacity:1, offset:1 }
+        ], { duration: 550+Math.random()*300, easing:'ease-out', fill:'forwards' });
+        anim.onfinish = ()=> ball.remove();
+      }, delay);
+    }
+  }
+
+  // scans every tile in every direction for a would-be match (axis or cross), same
+  // logic the drag handler uses to decide outcomes, just without actually moving anything
+  function hasAnyMove(){
+    if(!board) return true;
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        if(board[r][c]==null) continue;
+        for(const dirName in DIRS){
+          const pc = getPushChain(r,c,dirName);
+          if(pc.blocked) continue;
+          const [sdr,sdc] = DIRS[dirName];
+          const leadCell = pc.chain[pc.chain.length-1];
+          const horizontal = (dirName==='left'||dirName==='right');
+          const maxShift = horizontal ? Math.abs(pc.restC-leadCell.c) : Math.abs(pc.restR-leadCell.r);
+
+          for(let step=1; step<=maxShift; step++){
+            for(const cell of pc.chain){
+              const pr=cell.r+sdr*step, pcv=cell.c+sdc*step;
+              if(findPerpMatch(pr, pcv, board[cell.r][cell.c], dirName)) return true;
+            }
+          }
+          if(pc.obstruction && pc.obstruction.val === board[leadCell.r][leadCell.c]) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  let autoReshufflePending = false;
+
+  function updateShuffleHint(){
+    const noMoves = board && remaining > 2 && !hasAnyMove();
+
+    if(noMoves && !autoReshufflePending){
+      autoReshufflePending = true;
+      setTimeout(()=>{
+        autoReshufflePending = false;
+        if(!animating && board && !hasAnyMove()){
+          autoReshuffle();
+        }
+      }, 1000);
+    }
+  }
+
+  function showReshuffleText(){
+    const el = document.getElementById('reshuffle-text');
+    el.animate([
+      { transform:'scale(0.3)', opacity:0, offset:0 },
+      { transform:'scale(1.1)', opacity:1, offset:0.35 },
+      { transform:'scale(1)',   opacity:1, offset:0.6 },
+      { transform:'scale(1)',   opacity:0, offset:1 }
+    ], { duration: D(1200), easing:'ease-out' });
+  }
+
+  function showHardLevelBanner(){
+    const el = document.getElementById('hard-level-text');
+    el.animate([
+      { transform:'scale(0.3)', opacity:0, offset:0 },
+      { transform:'scale(1)',   opacity:1, offset:0.15 },
+      { transform:'scale(1)',   opacity:1, offset:0.82 },
+      { transform:'scale(0.3)', opacity:0, offset:1 }
+    ], { duration: D(1500), easing:'ease-in-out' });
+
+    const dim = document.getElementById('hard-level-dim');
+    dim.animate([
+      { opacity:0, offset:0 },
+      { opacity:1, offset:0.15 },
+      { opacity:1, offset:0.82 },
+      { opacity:0, offset:1 }
+    ], { duration: D(1500), easing:'ease-in-out' });
+  }
+
+  function autoReshuffle(){
+    setAnimating(true);
+    showReshuffleText();
+    const els = Object.values(tileMap);
+
+    Promise.all(els.map(el => el.animate([
+      { transform:'rotate(0deg)' },
+      { transform:'rotate(360deg)' }
+    ], { duration: D(600), easing:'ease-in-out' }).finished))
+    .then(()=> Promise.all(els.map(el => el.animate([
+      { opacity:1 }, { opacity:0 }
+    ], { duration: D(150), easing:'ease-in', fill:'forwards' }).finished)))
+    .then(()=>{
+      const positions = [], values = [];
+      for(let r=0;r<ROWS;r++){
+        for(let c=0;c<COLS;c++){
+          if(board[r][c]!=null){ positions.push({r,c}); values.push(board[r][c]); }
+        }
+      }
+      shuffle(values);
+      positions.forEach((p,i)=>{ board[p.r][p.c] = values[i]; });
+      recalcBombStartCount();
+      renderTiles();
+
+      const newEls = Object.values(tileMap);
+      newEls.forEach(el => { el.style.opacity = '0'; });
+      return Promise.all(newEls.map(el => el.animate([
+        { opacity:0 }, { opacity:1 }
+      ], { duration: D(200), easing:'ease-out', fill:'forwards' }).finished.then(()=>{ el.style.opacity=''; })));
+    })
+    .then(()=>{
+      logMove('AUTO-RESHUFFLE (no moves were available)');
+      setAnimating(false);
+    })
+    .catch((err)=>{
+      logMove('ERROR during auto-reshuffle: '+err.message);
+      setAnimating(false);
+    });
+  }
+
+  // collects every available match anywhere on the board, tap-ready ones first,
+  // then push-based ones, deduping (a,b) vs (b,a) as the same move
+  function findAllHintMoves(){
+    const moves = [];
+    const seen = new Set();
+    const addMove = (a,b)=>{
+      const key = [`${a.r},${a.c}`, `${b.r},${b.c}`].sort().join('|');
+      if(seen.has(key)) return;
+      seen.add(key);
+      moves.push({a,b});
+    };
+
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        if(board[r][c]==null) continue;
+        const partner = findMatchPartner(r,c,board[r][c]);
+        if(partner) addMove({r,c}, partner);
+      }
+    }
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        if(board[r][c]==null) continue;
+        for(const dirName in DIRS){
+          const pc = getPushChain(r,c,dirName);
+          if(pc.blocked) continue;
+          const [sdr,sdc] = DIRS[dirName];
+          const leadCell = pc.chain[pc.chain.length-1];
+          const horizontal = (dirName==='left'||dirName==='right');
+          const maxShift = horizontal ? Math.abs(pc.restC-leadCell.c) : Math.abs(pc.restR-leadCell.r);
+          for(let step=1; step<=maxShift; step++){
+            for(const cell of pc.chain){
+              const pr=cell.r+sdr*step, pcv=cell.c+sdc*step;
+              const p = findPerpMatch(pr, pcv, board[cell.r][cell.c], dirName);
+              if(p) addMove({r:cell.r,c:cell.c}, p);
+            }
+          }
+          if(pc.obstruction && pc.obstruction.val === board[leadCell.r][leadCell.c]){
+            addMove({r:leadCell.r,c:leadCell.c}, {r:pc.obstruction.r,c:pc.obstruction.c});
+          }
+        }
+      }
+    }
+    return moves;
+  }
+
+  let hintSignature = null, hintIndex = 0;
+
+  function showHint(){
+    if(animating) return;
+    const moves = findAllHintMoves();
+    if(moves.length===0) return;
+
+    const sig = board.map(row=>row.join(',')).join(';');
+    if(sig !== hintSignature){
+      hintSignature = sig;
+      hintIndex = 0;
+    } else {
+      hintIndex = (hintIndex+1) % moves.length;
+    }
+
+    const hint = moves[hintIndex];
+    [hint.a, hint.b].forEach(cell=>{
+      const el = tileMap[cell.r+','+cell.c];
+      if(!el) return;
+      el.animate([
+        { transform:'scale(1) rotate(0deg)',        offset:0 },
+        { transform:'scale(0.95) rotate(0deg)',     offset:0.15 },
+        { transform:'scale(1.3) rotate(-8deg)',     offset:0.35 },
+        { transform:'scale(1.3) rotate(7deg)',      offset:0.5 },
+        { transform:'scale(1.3) rotate(-5deg)',     offset:0.68 },
+        { transform:'scale(1.3) rotate(2deg)',      offset:0.82 },
+        { transform:'scale(1) rotate(0deg)',        offset:1 }
+      ], { duration: D(700), easing:'ease-in-out' });
+    });
+  }
+
+  setInterval(()=>{
+    if(animating && animatingSince && Date.now()-animatingSince > 4000){
+      console.warn('Slide Match: animation lock exceeded 4s, force-clearing.');
+      logMove('WATCHDOG force-cleared a stuck animating flag');
+      if(bombExploding){
+        logMove('WATCHDOG also reset a stuck bombExploding flag');
+        bombExploding = false;
+      }
+      setAnimating(false);
+    }
+  }, 1000);
+
+  let gameStarted = false;
+  let titleWantsNewGame = true;
+  const titleScreenEl = document.getElementById('title-screen');
+
+  function showTitleScreen(wantsNewGame){
+    titleWantsNewGame = wantsNewGame;
+    titleScreenEl.classList.add('show');
+  }
+  function hideTitleScreen(){
+    titleScreenEl.classList.remove('show');
+  }
+
+  document.getElementById('btn-continue').addEventListener('click', ()=>{
+    hideTitleScreen();
+    if(!gameStarted || titleWantsNewGame){
+      gameStarted = true;
+      init();
+    }
+  });
+
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible' && gameStarted){
+      showTitleScreen(false);
+    }
+  });
+
+  // Height-First Auto-Scaling: the grid already has aspect-ratio:6/8 set in CSS,
+  // so unlike a per-block geometry, solving for width is just height*(6/8) — the
+  // real work is measuring actual chrome height instead of guessing it.
+  let scaleRafId = null;
+  function updateBoardScale(){
+    if(scaleRafId) cancelAnimationFrame(scaleRafId);
+    scaleRafId = requestAnimationFrame(()=>{
+      scaleRafId = null;
+      const appEl = document.getElementById('app');
+      if(!appEl) return;
+
+      const outerHeight = (el)=>{
+        if(!el) return 0;
+        const s = getComputedStyle(el);
+        return el.offsetHeight + parseFloat(s.marginTop||0) + parseFloat(s.marginBottom||0);
+      };
+
+      const appStyle = getComputedStyle(appEl);
+      const appPadV = parseFloat(appStyle.paddingTop||0) + parseFloat(appStyle.paddingBottom||0);
+
+      const chromeHeight = appPadV
+        + outerHeight(document.getElementById('game-title'))
+        + outerHeight(document.getElementById('hud'))
+        + outerHeight(document.getElementById('action-bar'))
+        + outerHeight(document.getElementById('killer-instructions'))
+        + outerHeight(document.getElementById('hard-mode-hint'));
+
+      const trueAvailableHeight = window.innerHeight - chromeHeight;
+
+      // grid aspect-ratio is 6/8 (width:height), so width = height * (6/8)
+      let targetW = trueAvailableHeight * (6/8);
+
+      const widthCapFromViewport = window.innerWidth * 0.92;
+      targetW = Math.min(targetW, widthCapFromViewport, 420);
+      targetW = Math.max(targetW, 160);
+
+      appEl.style.setProperty('--board-max-w', targetW + 'px');
+    });
+  }
+  window.addEventListener('resize', updateBoardScale);
+  window.addEventListener('orientationchange', updateBoardScale);
+
+  function init(){
+    level = 1;
+    newGame();
+  }
+
+  function newGame(){
+    level = 1;
+    lives = 5;
+    highestLevel = 1;
+    perfectStreak = 0;
+    diffusersAvailable = 0;
+    startLevel();
+  }
+
+  function startLevel(){
+    bombExploding = false;
+    levelHadMistake = false;
+    stopFireworks();
+    stopVDrip();
+    highestLevel = Math.max(highestLevel, level);
+    overlayLose.classList.remove('show');
+    overlayWin.classList.remove('show');
+    levelEl.textContent = 'Level ' + level;
+    renderLives();
+    renderDiffuser();
+    buildBoard();
+    setAnimating(false);
+    updateBoardScale();
+  }
+
+  let killerArmed = false;
+
+  function renderDiffuser(){
+    const btn = document.getElementById('btn-diffuser');
+    const wrap = document.getElementById('gun-wrap');
+    const count = document.getElementById('gun-lock-count');
+    const instructions = document.getElementById('killer-instructions');
+    if(!btn) return;
+    btn.classList.toggle('available', diffusersAvailable > 0 && !killerArmed);
+    btn.classList.toggle('armed', killerArmed);
+    const unlocked = diffusersAvailable > 0;
+    if(wrap) wrap.classList.toggle('unlocked', unlocked);
+    if(count) count.textContent = Math.max(0, 3 - perfectStreak);
+    if(instructions) instructions.classList.toggle('show', killerArmed);
+  }
+
+  function pulseLockMistake(){
+    const lock = document.getElementById('gun-lock');
+    if(!lock) return;
+    lock.classList.remove('pulse-mistake');
+    void lock.offsetWidth; // restart the animation if it's already mid-pulse
+    lock.classList.add('pulse-mistake');
+  }
+
+  function toggleTileKiller(){
+    if(animating) return;
+    if(!killerArmed && diffusersAvailable <= 0) return;
+    killerArmed = !killerArmed;
+    if(killerArmed) highlightAllForKiller(); else clearKillerHighlights();
+    renderDiffuser();
+  }
+
+  function highlightAllForKiller(){
+    Object.values(tileMap).forEach(el => el.classList.add('killer-highlight'));
+  }
+  function clearKillerHighlights(){
+    Object.values(tileMap).forEach(el => el.classList.remove('killer-highlight'));
+  }
+
+  // quick bright beam from the gun to a target point, used for the kill presentation
+  function spawnLaser(x1,y1,x2,y2,duration){
+    const dx=x2-x1, dy=y2-y1;
+    const dist = Math.hypot(dx,dy);
+    const angle = Math.atan2(dy,dx) * 180/Math.PI;
+    const beam = document.createElement('div');
+    beam.style.position = 'absolute';
+    beam.style.left = x1+'px';
+    beam.style.top = y1+'px';
+    beam.style.width = dist+'px';
+    beam.style.height = '4.2px';
+    beam.style.background = 'linear-gradient(90deg, #3a9bff, #d6f0ff)';
+    beam.style.boxShadow = '0 0 10px 3px rgba(58,155,255,0.9)';
+    beam.style.transformOrigin = '0 50%';
+    beam.style.pointerEvents = 'none';
+    beam.style.zIndex = '160';
+    boardWrap.appendChild(beam);
+
+    const anim = beam.animate([
+      { transform:`rotate(${angle}deg) scaleX(0)`, opacity:1, offset:0 },
+      { transform:`rotate(${angle}deg) scaleX(1)`, opacity:1, offset:0.4 },
+      { transform:`rotate(${angle}deg) scaleX(1)`, opacity:1, offset:0.7 },
+      { transform:`rotate(${angle}deg) scaleX(1)`, opacity:0, offset:1 }
+    ], { duration: D(duration), easing:'ease-out' });
+    return new Promise(resolve=>{ anim.onfinish = ()=>{ beam.remove(); resolve(); }; });
+  }
+
+  // finds whatever other tile of the same value is physically closest, ignoring
+  // row/column alignment entirely — this is a forced kill, not a real match
+  function findNearestSameTile(r,c,val){
+    let best = null, bestDist = Infinity;
+    for(let rr=0;rr<ROWS;rr++){
+      for(let cc=0;cc<COLS;cc++){
+        if(rr===r && cc===c) continue;
+        if(board[rr][cc] !== val) continue;
+        const dist = Math.hypot(rr-r, cc-c);
+        if(dist < bestDist){ bestDist = dist; best = {r:rr,c:cc}; }
+      }
+    }
+    return best;
+  }
+
+  // debug only: instantly clears ~90% of whatever's left on the board, in
+  // matching pairs (regardless of alignment), so you can quickly get to an
+  // end-of-level state without actually playing it out
+  function debugSolve(){
+    if(animating) return;
+    const cells = [];
+    for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(board[r][c]!=null) cells.push({r,c,val:board[r][c]});
+    const targetRemovals = Math.floor(cells.length * 0.9 / 2) * 2;
+    shuffle(cells);
+    const byVal = {};
+    cells.forEach(cell=>{ (byVal[cell.val] = byVal[cell.val] || []).push(cell); });
+
+    let removed = 0;
+    for(const val in byVal){
+      const list = byVal[val];
+      while(list.length >= 2 && removed < targetRemovals){
+        const a = list.pop(), b = list.pop();
+        const elA = tileMap[a.r+','+a.c], elB = tileMap[b.r+','+b.c];
+        if(elA) elA.remove();
+        if(elB) elB.remove();
+        delete tileMap[a.r+','+a.c]; delete tileMap[b.r+','+b.c];
+        board[a.r][a.c] = null; board[b.r][b.c] = null;
+        remaining -= 2;
+        removed += 2;
+      }
+      if(removed >= targetRemovals) break;
+    }
+    logMove(`DEBUG SOLVE: removed ${removed} tiles`);
+    checkWin();
+  }
+
+  function fireTileKiller(r,c){
+    const val = board[r][c];
+    if(val==null) return;
+    const partner = findNearestSameTile(r,c,val);
+    killerArmed = false;
+    clearKillerHighlights();
+    if(!partner){ renderDiffuser(); return; } // nothing to pair with, charge not spent
+    // note: renderDiffuser() deliberately NOT called here yet — button keeps
+    // showing "armed" visually until the sequence + 0.8s grace has passed
+
+    const gunRect = document.getElementById('btn-diffuser').getBoundingClientRect();
+    const wrapRect = boardWrap.getBoundingClientRect();
+    const gunX = gunRect.left + gunRect.width/2 - wrapRect.left;
+    const gunY = gunRect.top + gunRect.height/2 - wrapRect.top;
+
+    const elA = tileMap[r+','+c];
+    const rectA = elA.getBoundingClientRect();
+    const ax = rectA.left + rectA.width/2 - wrapRect.left, ay = rectA.top + rectA.height/2 - wrapRect.top;
+
+    const elB = tileMap[partner.r+','+partner.c];
+    const rectB = elB.getBoundingClientRect();
+    const bx = rectB.left + rectB.width/2 - wrapRect.left, by = rectB.top + rectB.height/2 - wrapRect.top;
+
+    animating = true; animatingSince = Date.now();
+
+    spawnLaser(gunX, gunY, ax, ay, 200).then(()=>{
+      violentWiggle(elA);
+      setTimeout(()=>{
+        spawnLaser(gunX, gunY, bx, by, 200).then(()=>{
+          violentWiggle(elB);
+          diffusersAvailable--;
+          logMove(`Tile Killer fired on (${r},${c})=${val}, nearest match (${partner.r},${partner.c}) (${diffusersAvailable} left)`);
+          doMatch(r, c, r, c, partner.r, partner.c);
+          setTimeout(renderDiffuser, 800);
+        });
+      }, 200);
+    });
+  }
+
+  function renderLives(){
+    livesEl.innerHTML = '';
+    for(let i=0;i<5;i++){
+      const s = document.createElement('span');
+      s.textContent = '♥';
+      if(i >= lives) s.classList.add('lost');
+      livesEl.appendChild(s);
+    }
+  }
+
+  // (re)creates tile elements to match whatever is currently in the board array
+  function renderTiles(){
+    Object.values(tileMap).forEach(el => el.remove());
+    tileMap = {};
+    remaining = 0;
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        if(board[r][c]!=null){
+          remaining++;
+          createTile(r,c,board[r][c]);
+        }
+      }
+    }
+  }
+
+  function buildBoard(){
+    gridEl.innerHTML = '';
+    tileMap = {};
+    cellMap = {};
+    board = Array.from({length:ROWS}, ()=> Array(COLS).fill(null));
+
+    // background cells, also used as fixed reference points for drag distance
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        const cell = document.createElement('div');
+        cell.className='cell';
+        cell.style.gridRowStart = r+1;
+        cell.style.gridColumnStart = c+1;
+        gridEl.appendChild(cell);
+        cellMap[r+','+c] = cell;
+      }
+    }
+
+    // build values: 10 numbers x 4 copies = 40 tiles, 8 empty cells (48 total)
+    let values = [];
+    for(let n=1;n<=10;n++){ for(let k=0;k<4;k++) values.push(n); }
+    while(values.length < ROWS*COLS) values.push(null); // pad with empties
+    shuffle(values);
+
+    let idx=0;
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        board[r][c] = values[idx++];
+      }
+    }
+    const isHardMode = (level % 4 === 0);
+    if(isHardMode){ convertToBombs(); showHardLevelBanner(); }
+    document.getElementById('hard-mode-hint').classList.toggle('show', isHardMode);
+    renderTiles();
+  }
+
+  // picks a random number that has 4 copies on the board and turns 2 of them into
+  // bombs (leaving the other 2 as a normal pair, so total counts stay even/solvable)
+  let bombStartCount = 6;
+
+  // recomputes bombStartCount from wherever the bombs currently sit — call this
+  // before renderTiles() any time positions change (shuffle, auto-reshuffle),
+  // otherwise createTile falls back to whatever stale value was set at level start
+  function recalcBombStartCount(){
+    const bombCells = [];
+    for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(board[r][c]==='bomb') bombCells.push({r,c});
+    if(bombCells.length < 2) return;
+    const [a,b] = bombCells;
+    bombStartCount = estimateBombCountdown(a.r,a.c,b.r,b.c);
+  }
+
+  function convertToBombs(){
+    const targetNum = 1 + Math.floor(Math.random()*10);
+    const positions = [];
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        if(board[r][c] === targetNum) positions.push({r,c});
+      }
+    }
+    shuffle(positions);
+    if(positions.length < 2) return;
+    const [a, b] = positions;
+    board[a.r][a.c] = 'bomb';
+    board[b.r][b.c] = 'bomb';
+    bombStartCount = estimateBombCountdown(a.r, a.c, b.r, b.c);
+  }
+
+  // counts non-empty tiles strictly between two points along one straight row/column run
+  function countObstaclesBetween(r1,c1,r2,c2){
+    let n = 0;
+    if(r1 === r2){
+      const cmin=Math.min(c1,c2), cmax=Math.max(c1,c2);
+      for(let c=cmin+1;c<cmax;c++) if(board[r1][c]!=null) n++;
+    } else if(c1 === c2){
+      const rmin=Math.min(r1,r2), rmax=Math.max(r1,r2);
+      for(let r=rmin+1;r<rmax;r++) if(board[r][c1]!=null) n++;
+    }
+    return n;
+  }
+
+  // heuristic only — not a real solver. If the bombs already share a row/column,
+  // just count what's directly between them. Otherwise estimate via the cheaper
+  // of the two possible L-shaped routes. Plus one grace move, per request.
+  function estimateBombCountdown(r1,c1,r2,c2){
+    let obstacles;
+    if(r1 === r2 || c1 === c2){
+      obstacles = countObstaclesBetween(r1,c1,r2,c2);
+    } else {
+      const viaRow1 = countObstaclesBetween(r1,c1,r1,c2) + countObstaclesBetween(r1,c2,r2,c2);
+      const viaCol1 = countObstaclesBetween(r1,c1,r2,c1) + countObstaclesBetween(r2,c1,r2,c2);
+      obstacles = Math.min(viaRow1, viaCol1);
+    }
+    return obstacles + 5; // grace moves
+  }
+
+  // reshuffles just the tiles still on the board, keeping their cells fixed
+  function shuffle(arr){
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [arr[i],arr[j]] = [arr[j],arr[i]];
+    }
+  }
+
+  function createTile(r,c,val){
+    const el = document.createElement('div');
+    el.className='tile';
+    if(val === 'bomb'){
+      el.classList.add('bomb-tile');
+      el.dataset.bombCount = bombStartCount;
+      el.style.background = '#3a3a3a';
+      el.style.color = '#fff';
+      const numberSpan = document.createElement('span');
+      numberSpan.className = 'bomb-number';
+      numberSpan.style.color = '#ff3b3b';
+      numberSpan.textContent = bombStartCount;
+      el.appendChild(numberSpan);
+      const wick = document.createElement('div');
+      wick.className = 'bomb-wick';
+      el.appendChild(wick);
+      const spark = document.createElement('div');
+      spark.className = 'bomb-spark';
+      spark.textContent = '*';
+      el.appendChild(spark);
+    } else {
+      el.textContent = val;
+      el.style.background = PALETTE[val];
+      el.style.color = (val===4) ? 'rgba(34,34,34,0.5)' : 'rgba(255,255,255,0.5)';
+    }
+    el.style.gridRowStart = r+1;
+    el.style.gridColumnStart = c+1;
+    el.dataset.row = r;
+    el.dataset.col = c;
+    attachDrag(el);
+    gridEl.appendChild(el);
+    tileMap[r+','+c] = el;
+    return el;
+  }
+
+  // finds every empty cell reachable from an already-empty starting cell, and what's beyond it
+  function scanEmptyRun(startR,startC,dirName){
+    const [dr,dc] = DIRS[dirName];
+    let lastR=startR, lastC=startC, cr=startR, cc=startC, obstruction=null;
+    while(true){
+      const nr=cr+dr, nc=cc+dc;
+      if(nr<0||nr>=ROWS||nc<0||nc>=COLS) break;
+      if(board[nr][nc]==null){ lastR=nr; lastC=nc; cr=nr; cc=nc; continue; }
+      obstruction = {r:nr, c:nc, val:board[nr][nc]};
+      break;
+    }
+    return {lastR, lastC, obstruction};
+  }
+
+  // from a grabbed cell, collects every jammed (non-empty) tile between it and the
+  // leading edge in dirName; if that edge butts straight against the wall with no
+  // gap ever found, the whole thing is stuck. Otherwise reports where the leading
+  // tile can rest and what it would run into.
+  function getPushChain(r,c,dirName){
+    const [dr,dc] = DIRS[dirName];
+    const chain = [{r,c}];
+    let cr=r, cc=c;
+    while(true){
+      const nr=cr+dr, nc=cc+dc;
+      if(nr<0||nr>=ROWS||nc<0||nc>=COLS) return { chain, blocked:true };
+      if(board[nr][nc]==null){
+        const run = scanEmptyRun(nr,nc,dirName);
+        return { chain, blocked:false, restR:run.lastR, restC:run.lastC, obstruction:run.obstruction };
+      }
+      chain.push({r:nr,c:nc});
+      cr=nr; cc=nc;
+    }
+  }
+
+  function perpDirs(dirName){
+    return (dirName==='left'||dirName==='right') ? ['up','down'] : ['left','right'];
+  }
+
+  function findPerpMatch(r,c,val,dirName){
+    for(const d of perpDirs(dirName)){
+      const [dr,dc] = DIRS[d];
+      let nr=r+dr, nc=c+dc;
+      while(nr>=0 && nr<ROWS && nc>=0 && nc<COLS && board[nr][nc]==null){ nr+=dr; nc+=dc; }
+      if(nr>=0 && nr<ROWS && nc>=0 && nc<COLS && board[nr][nc]===val) return {r:nr, c:nc};
+    }
+    return null;
+  }
+
+  // permanently applies the shift for a chain of tiles; if skipCell is given (the lead
+  // tile in a match), that one is left for doMatch to clean up instead
+  function finalizeChainShift(chain, dr, dc, shiftCells, skipCell){
+    const isSkip = (cell)=> skipCell && cell.r===skipCell.r && cell.c===skipCell.c;
+
+    // capture everything up front, before any key gets deleted or overwritten
+    const entries = chain.filter(cell=>!isSkip(cell)).map(cell => ({
+      cell,
+      el: tileMap[cell.r+','+cell.c],
+      val: board[cell.r][cell.c],
+      newR: cell.r+dr*shiftCells,
+      newC: cell.c+dc*shiftCells
+    }));
+
+    chain.forEach(cell => { board[cell.r][cell.c] = null; });
+    entries.forEach(({cell})=>{ delete tileMap[cell.r+','+cell.c]; });
+    entries.forEach(({cell, el, val, newR, newC})=>{
+      if(!el){ logMove(`WARN: finalizeChainShift found no tile at (${cell.r},${cell.c})`); return; }
+      tileMap[newR+','+newC] = el;
+      el.dataset.row = newR; el.dataset.col = newC;
+      board[newR][newC] = val;
+      logMove(`  shift (${cell.r},${cell.c})=${val} -> (${newR},${newC})`);
+    });
+  }
+
+  function wiggleChain(els, duration=300){ return Promise.all(els.map(e=>wiggle(e, duration))); }
+
+  // pulls a whole mismatched chain back home using known pixel offsets (no re-measuring
+  // mid-flight, which is where the multi-tile revert was going wrong)
+  function revertChainToOrigin(chain, axis, dir, maxPx, duration){
+    const sign = (dir==='right'||dir==='down') ? 1 : -1;
+    const prop = axis==='x' ? 'translateX' : 'translateY';
+    const els = chain.map(cell => tileMap[cell.r+','+cell.c]);
+    return Promise.all(els.map(el2 => new Promise((resolve)=>{
+      const anim = el2.animate([
+        { transform:`${prop}(0px)` },
+        { transform:`${prop}(${-sign*maxPx}px)` }
+      ], { duration: D(duration), easing:'ease-out', fill:'forwards' });
+      anim.onfinish = ()=>{ anim.cancel(); resolve(); };
+    }))).then(()=>{
+      chain.forEach(cell=>{
+        const elx = tileMap[cell.r+','+cell.c];
+        elx.style.gridRowStart = cell.r+1;
+        elx.style.gridColumnStart = cell.c+1;
+        elx.style.transform = '';
+      });
+    });
+  }
+
+  // tile (and, if jammed against neighbors, its whole block) follows the finger live,
+  // clamped to how far the block can actually travel
+  function attachDrag(el){
+    let active=false, axisLocked=null, dirName=null, committed=false;
+    let startX=0, startY=0, dragR=0, dragC=0;
+    let dragChain=null, dragLeadCell=null, dragMatchCell=null, dragShiftCells=0;
+    let dragLastR=0, dragLastC=0, dragObstruction=null, dragCrossPartner=null, maxPx=0, committedPx=0;
+
+    el.addEventListener('pointerdown', (e)=>{
+      if(animating) return;
+      active = true;
+      committed = false;
+      axisLocked = null;
+      committedPx = 0;
+      startX = e.clientX; startY = e.clientY;
+      dragR = parseInt(el.dataset.row); dragC = parseInt(el.dataset.col);
+      el.setPointerCapture(e.pointerId);
+    });
+
+    el.addEventListener('pointermove', (e)=>{
+      if(!active || committed) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      if(axisLocked===null){
+        if(Math.max(Math.abs(dx),Math.abs(dy)) < 8) return;
+        axisLocked = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+        dirName = axisLocked==='x' ? (dx>0?'right':'left') : (dy>0?'down':'up');
+
+        // dragging straight into an adjacent tile of the same value = the player
+        // explicitly picking THAT one as the match, in a cluster of candidates
+        const [ndr,ndc] = DIRS[dirName];
+        const nr = dragR+ndr, nc = dragC+ndc;
+        if(nr>=0 && nr<ROWS && nc>=0 && nc<COLS && board[nr][nc]===board[dragR][dragC]){
+          committed = true;
+          active = false;
+          safeSetTransform(dragR, dragC, '');
+          doMatch(dragR, dragC, dragR, dragC, nr, nc);
+          return;
+        }
+
+        const pc = getPushChain(dragR,dragC,dirName);
+        dragChain = pc.chain;
+        dragLeadCell = pc.chain[pc.chain.length-1];
+
+        if(pc.blocked){
+          dragLastR = dragR; dragLastC = dragC;
+          dragObstruction = null; dragCrossPartner = null; dragMatchCell = null;
+          dragShiftCells = 0; maxPx = 0;
+        } else {
+          const [sdr,sdc] = DIRS[dirName];
+          const maxShift = axisLocked==='x' ? Math.abs(pc.restC-dragLeadCell.c) : Math.abs(pc.restR-dragLeadCell.r);
+
+          // check every tile in the pushed block, not just the lead, at each step of travel
+          let foundStep=null, foundPartner=null, foundCell=null;
+          for(let step=1; step<=maxShift && foundStep===null; step++){
+            for(const cell of dragChain){
+              const pr = cell.r+sdr*step, pcv = cell.c+sdc*step;
+              const val = board[cell.r][cell.c];
+              const p = findPerpMatch(pr, pcv, val, dirName);
+              if(p){ foundStep=step; foundPartner=p; foundCell=cell; break; }
+            }
+          }
+
+          if(foundStep!==null){
+            dragShiftCells = foundStep;
+            dragMatchCell = foundCell;
+            dragCrossPartner = foundPartner;
+            dragObstruction = null;
+          } else {
+            dragShiftCells = maxShift;
+            dragMatchCell = dragLeadCell;
+            dragCrossPartner = null;
+            dragObstruction = pc.obstruction;
+          }
+
+          dragLastR = dragLeadCell.r + sdr*dragShiftCells;
+          dragLastC = dragLeadCell.c + sdc*dragShiftCells;
+
+          const originRect = cellMap[dragLeadCell.r+','+dragLeadCell.c].getBoundingClientRect();
+          const destRect = cellMap[dragLastR+','+dragLastC].getBoundingClientRect();
+          maxPx = axisLocked==='x' ? Math.abs(destRect.left-originRect.left) : Math.abs(destRect.top-originRect.top);
+        }
+      }
+      const raw = axisLocked==='x' ? dx : dy;
+      const signedTowardTarget = (dirName==='right'||dirName==='down') ? raw : -raw;
+      committedPx = Math.max(0, Math.min(maxPx, signedTowardTarget));
+      const px = (dirName==='right'||dirName==='down') ? committedPx : -committedPx;
+      const transformStr = axisLocked==='x' ? `translateX(${px}px)` : `translateY(${px}px)`;
+      dragChain.forEach(cell=> safeSetTransform(cell.r, cell.c, transformStr));
+
+      // if the drag has reached a genuine match, commit right now instead of
+      // waiting for the finger to lift
+      if(maxPx>0 && committedPx>=maxPx && dragMatchCell){
+        const matchVal = board[dragMatchCell.r][dragMatchCell.c];
+        const isMatch = dragCrossPartner || (dragObstruction && dragObstruction.val===matchVal);
+        if(isMatch){
+          committed = true;
+          active = false;
+          commitDrag();
+        }
+      }
+    });
+
+    el.addEventListener('pointerup', ()=>{
+      if(!active) return;
+      active = false;
+      if(committed) return; // already handled mid-drag
+
+      if(axisLocked===null){
+        attemptTap(dragR,dragC);
+        return;
+      }
+      commitDrag();
+    });
+
+    function commitDrag(){
+      if(maxPx===0 && !dragObstruction && !dragCrossPartner){
+        dragChain.forEach(cell=> safeSetTransform(cell.r, cell.c, ''));
+        logMove(`push (${dragR},${dragC}) dir=${dirName} chain=${dragChain.length} -> blocked, no room`);
+        return;
+      }
+      if(committedPx < maxPx * 0.15){
+        dragChain.forEach(cell=> safeSetTransform(cell.r, cell.c, ''));
+        logMove(`push (${dragR},${dragC}) dir=${dirName} -> cancelled (dragged back near start)`);
+        return;
+      }
+      setAnimating(true);
+      const els = dragChain.map(cell=> tileMap[cell.r+','+cell.c]);
+      const [dr,dc] = DIRS[dirName];
+      const shiftCells = dragShiftCells;
+      const logPrefix = `push (${dragR},${dragC}) dir=${dirName} chain=${dragChain.length} shift=${shiftCells}`;
+
+      Promise.all(els.map(e2 => snapToFull(e2, axisLocked, dirName, committedPx, maxPx, 120))).then(()=>{
+        try{
+          dragChain.forEach(cell=>{
+            const elx = tileMap[cell.r+','+cell.c];
+            if(!elx){ logMove(`WARN: missing tile at (${cell.r},${cell.c}) during shift`); return; }
+            const nr = cell.r+dr*shiftCells, nc = cell.c+dc*shiftCells;
+            elx.style.gridRowStart = nr+1; elx.style.gridColumnStart = nc+1;
+            elx.style.transform = '';
+          });
+
+          const matchEl = tileMap[dragMatchCell.r+','+dragMatchCell.c];
+          const matchVal = board[dragMatchCell.r][dragMatchCell.c];
+          if(dragObstruction && dragObstruction.val === matchVal){
+            logMove(`${logPrefix} -> MATCH (axis) tile(${dragMatchCell.r},${dragMatchCell.c})=${matchVal} vs (${dragObstruction.r},${dragObstruction.c})=${dragObstruction.val}`);
+            finalizeChainShift(dragChain, dr, dc, shiftCells, dragMatchCell);
+            doMatch(dragMatchCell.r, dragMatchCell.c, dragLastR, dragLastC, dragObstruction.r, dragObstruction.c, matchEl);
+          } else if(dragCrossPartner){
+            const partnerVal = board[dragCrossPartner.r][dragCrossPartner.c];
+            if(partnerVal !== matchVal){
+              logMove(`${logPrefix} -> ABORTED cross-match mismatch! tile(${dragMatchCell.r},${dragMatchCell.c})=${matchVal} vs (${dragCrossPartner.r},${dragCrossPartner.c})=${partnerVal}`);
+              wiggleChain(els)
+                .then(()=> revertChainToOrigin(dragChain, axisLocked, dirName, maxPx, 150))
+                .then(()=>{ setAnimating(false); })
+                .catch((err)=>{ logMove('ERROR during abort-revert: '+err.message); setAnimating(false); });
+            } else {
+              const mr = dragMatchCell.r+dr*shiftCells, mc = dragMatchCell.c+dc*shiftCells;
+              logMove(`${logPrefix} -> MATCH (cross) tile(${dragMatchCell.r},${dragMatchCell.c})=${matchVal} vs (${dragCrossPartner.r},${dragCrossPartner.c})=${partnerVal}`);
+              finalizeChainShift(dragChain, dr, dc, shiftCells, dragMatchCell);
+              doMatch(dragMatchCell.r, dragMatchCell.c, mr, mc, dragCrossPartner.r, dragCrossPartner.c, matchEl);
+            }
+          } else {
+            logMove(`${logPrefix} -> NO MATCH, reverting`);
+            wiggleChain(els)
+              .then(()=> revertChainToOrigin(dragChain, axisLocked, dirName, maxPx, 150))
+              .then(()=>{
+                setAnimating(false);
+                loseLife();
+              })
+              .catch((err)=>{ logMove('ERROR during revert: '+err.message); setAnimating(false); });
+          }
+        } catch(err){
+          logMove(`ERROR: ${err.message} during ${logPrefix}`);
+          setAnimating(false);
+        }
+      }).catch((err)=>{
+        logMove(`ERROR: ${err.message} during drag snap`);
+        setAnimating(false);
+      });
+    }
+
+    el.addEventListener('pointercancel', ()=>{
+      if(active && axisLocked!==null && dragChain){
+        dragChain.forEach(cell=>{
+          const e2 = tileMap[cell.r+','+cell.c];
+          if(e2) e2.style.transform = '';
+        });
+      }
+      active = false;
+    });
+  }
+
+  function findMatchPartner(r,c,val){
+    for(const dir in DIRS){
+      const [dr,dc] = DIRS[dir];
+      let nr=r+dr, nc=c+dc;
+      while(nr>=0 && nr<ROWS && nc>=0 && nc<COLS && board[nr][nc]==null){
+        nr+=dr; nc+=dc;
+      }
+      if(nr>=0 && nr<ROWS && nc>=0 && nc<COLS && board[nr][nc]===val){
+        return {r:nr, c:nc};
+      }
+    }
+    return null;
+  }
+
+  function attemptTap(r,c){
+    if(animating) return;
+    if(killerArmed){ fireTileKiller(r,c); return; }
+    const val = board[r][c];
+    if(val==null) return;
+    const partner = findMatchPartner(r,c,val);
+    if(partner){
+      const partnerVal = board[partner.r][partner.c];
+      if(partnerVal !== val){
+        logMove(`tap (${r},${c})=${val} -> ABORTED mismatch vs (${partner.r},${partner.c})=${partnerVal}`);
+        return;
+      }
+      logMove(`tap (${r},${c})=${val} -> MATCH vs (${partner.r},${partner.c})`);
+      doMatch(r,c,r,c,partner.r,partner.c);
+    } else {
+      logMove(`tap (${r},${c}) val=${val} -> no partner`);
+    }
+  }
+
+  // finishes a drag the rest of the way to its resting cell using known pixel offsets, no re-measuring
+  function snapToFull(el, axis, dir, fromPx, maxPx, duration){
+    return new Promise((resolve)=>{
+      if(fromPx >= maxPx){ resolve(); return; }
+      const sign = (dir==='right'||dir==='down') ? 1 : -1;
+      const prop = axis==='x' ? 'translateX' : 'translateY';
+      const anim = el.animate([
+        { transform:`${prop}(${sign*fromPx}px)` },
+        { transform:`${prop}(${sign*maxPx}px)` }
+      ], { duration: D(duration), easing:'ease-out', fill:'forwards' });
+      anim.onfinish = ()=>{ anim.cancel(); resolve(); };
+    });
+  }
+
+  function wiggle(el, duration=300){
+    return new Promise((resolve)=>{
+      const anim = el.animate([
+        { transform:'rotate(0deg)' },
+        { transform:'rotate(-8deg)' },
+        { transform:'rotate(7deg)' },
+        { transform:'rotate(-5deg)' },
+        { transform:'rotate(0deg)' }
+      ], { duration: D(duration), easing:'ease-in-out' });
+      anim.onfinish = resolve;
+    });
+  }
+
+  function violentWiggle(el, duration=350){
+    return new Promise((resolve)=>{
+      const anim = el.animate([
+        { transform:'rotate(0deg) scale(1)' },
+        { transform:'rotate(-18deg) scale(1.08)' },
+        { transform:'rotate(16deg) scale(0.95)' },
+        { transform:'rotate(-14deg) scale(1.05)' },
+        { transform:'rotate(12deg) scale(0.97)' },
+        { transform:'rotate(0deg) scale(1)' }
+      ], { duration: D(duration), easing:'ease-in-out' });
+      anim.onfinish = resolve;
+    });
+  }
+
+  function doMatch(r,c,lastR,lastC,tr,tc,moverElOverride){
+    // mover is already visually at (lastR,lastC), adjacent to the target
+    setAnimating(true);
+    const mover = moverElOverride || tileMap[r+','+c];
+    const target = tileMap[tr+','+tc];
+
+    if(!mover || !target){
+      logMove(`ERROR: doMatch aborted, missing element (mover=${!!mover} target=${!!target}) for (${r},${c})<->(${tr},${tc})`);
+      setAnimating(false);
+      return;
+    }
+
+    const mRect = mover.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    const wrapRect = boardWrap.getBoundingClientRect();
+    const mCenter = { x: mRect.left + mRect.width/2 - wrapRect.left, y: mRect.top + mRect.height/2 - wrapRect.top };
+    const tCenter = { x: tRect.left + tRect.width/2 - wrapRect.left, y: tRect.top + tRect.height/2 - wrapRect.top };
+    const distance = Math.hypot(tCenter.x-mCenter.x, tCenter.y-mCenter.y);
+    const angle = Math.atan2(tCenter.y-mCenter.y, tCenter.x-mCenter.x) * 180/Math.PI;
+
+    const midX = (mCenter.x + tCenter.x) / 2;
+    const midY = (mCenter.y + tCenter.y) / 2;
+
+    const lineWrap = document.createElement('div');
+    lineWrap.className = 'match-line-wrap';
+    lineWrap.style.left = midX + 'px';
+    lineWrap.style.top = midY + 'px';
+    lineWrap.style.transform = `rotate(${angle}deg)`;
+    boardWrap.appendChild(lineWrap);
+
+    const bar = document.createElement('div');
+    bar.className = 'match-line';
+    bar.style.width = distance + 'px';
+    lineWrap.appendChild(bar);
+
+    const dux = distance ? (tCenter.x - mCenter.x) / distance : 0;
+    const duy = distance ? (tCenter.y - mCenter.y) / distance : 0;
+    const cellSize = mRect.width;
+    const recoil = cellSize * 0.5;
+    const travel = distance * 0.5;
+    const total = D(720);
+    const matchColor = mover.style.background || PALETTE[board[r][c]] || '#ffffff';
+    const isBombMatch = mover.classList.contains('bomb-tile');
+    setTimeout(()=>{
+      spawnShockwave(boardWrap, midX, midY, matchColor);
+      if(isBombMatch) spawnSmokePuff(boardWrap, midX, midY);
+    }, total*0.45);
+    const horizontal = Math.abs(dux) >= Math.abs(duy);
+    const t = (x,y,along,perp)=>{
+      const sx = horizontal ? along : perp;
+      const sy = horizontal ? perp : along;
+      return `translate(${x}px,${y}px) scaleX(${sx}) scaleY(${sy})`;
+    };
+
+    // keeps the inner edge pinned at the shared midpoint as the along-axis scale
+    // changes, so growth/squash reads as happening around the MERGED tile's
+    // center rather than each tile's own individual center
+    const alongPos = (alongScale)=> travel - cellSize*alongScale/2;
+
+    // offsets: draw/hold -> recoil -> yank -> IMPACT -> squish-squash wobble -> vanish
+    const moverAnim = mover.animate([
+      { transform:t(0,0,1,1), offset:0 },
+      { transform:t(0,0,1,1), offset:0.12 },
+      { transform:t(-dux*recoil,-duy*recoil,1,1), offset:0.27 },
+      { transform:t(dux*travel,duy*travel,1.265,0.935), offset:0.58 },
+      { transform:t(dux*alongPos(0.5),duy*alongPos(0.5),0.5,1.1), offset:0.65 },
+      { transform:t(dux*alongPos(0.44),duy*alongPos(0.44),0.44,1.432), offset:0.78 },
+      { transform:t(dux*alongPos(0.5),duy*alongPos(0.5),0.5,1), offset:0.93 },
+      { transform:t(dux*travel,duy*travel,0,0), offset:1 }
+    ], { duration: total, easing:'ease-in-out', fill:'forwards' });
+
+    target.animate([
+      { transform:t(0,0,1,1), offset:0 },
+      { transform:t(0,0,1,1), offset:0.12 },
+      { transform:t(dux*recoil,duy*recoil,1,1), offset:0.27 },
+      { transform:t(-dux*travel,-duy*travel,1.265,0.935), offset:0.58 },
+      { transform:t(-dux*alongPos(0.5),-duy*alongPos(0.5),0.5,1.1), offset:0.65 },
+      { transform:t(-dux*alongPos(0.44),-duy*alongPos(0.44),0.44,1.432), offset:0.78 },
+      { transform:t(-dux*alongPos(0.5),-duy*alongPos(0.5),0.5,1), offset:0.93 },
+      { transform:t(-dux*travel,-duy*travel,0,0), offset:1 }
+    ], { duration: total, easing:'ease-in-out', fill:'forwards' });
+
+    // bar only ever handles translate(-50%,-50%) [static centering on the wrapper's
+    // rotation point] + scaleX [length] + height [thickness]; rotation lives on the
+    // wrapper alone, so there's no ambiguity about transform composition order.
+    // Fully gone by the moment of impact (0.58), matching the tiles' yank-end.
+    bar.animate([
+      { transform:'translate(-50%,-50%) scaleX(0)', height:'2px', offset:0 },
+      { transform:'translate(-50%,-50%) scaleX(1)', height:'2px', offset:0.12 },
+      { transform:'translate(-50%,-50%) scaleX(1)', height:'2px', offset:0.27 },
+      { transform:'translate(-50%,-50%) scaleX(0)', height:'9px', offset:0.58 },
+      { transform:'translate(-50%,-50%) scaleX(0)', height:'9px', offset:1 }
+    ], { duration: total, fill:'forwards' });
+
+    moverAnim.onfinish = ()=>{
+      mover.remove(); target.remove(); lineWrap.remove();
+      if(tileMap[r+','+c] === mover){
+        delete tileMap[r+','+c];
+        board[r][c] = null;
+      }
+      delete tileMap[tr+','+tc];
+      board[tr][tc] = null;
+      remaining -= 2;
+      setAnimating(false);
+      checkWin();
+    };
+  }
+
+  function flashOuch(){
+    const flash = document.getElementById('ouch-flash');
+    flash.animate([
+      { opacity:0 },
+      { opacity:0.35, offset:0.2 },
+      { opacity:0 }
+    ], { duration: D(700), easing:'ease-out' });
+    wiggleChain(Object.values(tileMap), 700);
+  }
+
+  let vDripInterval = null;
+
+  function spawnVDrip(){
+    const v = document.createElement('div');
+    v.textContent = 'V';
+    v.style.position = 'absolute';
+    v.style.left = (Math.random()*100) + '%';
+    v.style.top = '-30px';
+    v.style.color = '#e0102a';
+    v.style.fontWeight = '900';
+    v.style.fontSize = (14 + Math.random()*20) + 'px';
+    v.style.textShadow = '0 0 6px rgba(255,0,0,0.8), 0 2px 0 #4a0008';
+    v.style.pointerEvents = 'none';
+    v.style.zIndex = '0';
+    overlayLose.appendChild(v);
+
+    const duration = 2200 + Math.random()*2200;
+    const anim = v.animate([
+      { transform:'translateY(0)', opacity:1 },
+      { transform:`translateY(${window.innerHeight+60}px)`, opacity:0.85 }
+    ], { duration, easing:'linear' });
+    anim.onfinish = ()=> v.remove();
+  }
+
+  function startVDrip(){
+    if(vDripInterval) return;
+    vDripInterval = setInterval(spawnVDrip, 160);
+  }
+
+  function stopVDrip(){
+    clearInterval(vDripInterval);
+    vDripInterval = null;
+  }
+
+  function loseLife(){
+    lives--;
+    levelHadMistake = true;
+    if(diffusersAvailable <= 0 && perfectStreak > 0){
+      perfectStreak = 0;
+      renderDiffuser();
+      pulseLockMistake();
+    }
+    renderLives();
+    flashOuch();
+    if(lives <= 0){
+      document.getElementById('highest-level-text').textContent = `Highest Level: ${highestLevel}`;
+      overlayLose.classList.add('show');
+      startVDrip();
+    }
+  }
+
+  // one dotted-ring sprite: rises, decelerates, settles slightly, fades — no
+  // real particles, just one SVG element animated with WAAPI
+  // soft grey smoke puffs that drift up and fizzle out, for when bombs get
+  // defused via a normal match (as opposed to actually detonating)
+  function spawnSmokePuff(container, x, y){
+    const count = 8;
+    for(let i=0;i<count;i++){
+      const size = 14 + Math.random()*18;
+      const driftX = (Math.random()-0.5)*40;
+      const driftY = -30 - Math.random()*35;
+      const delay = Math.random()*600;
+      const shade = 90 + Math.floor(Math.random()*60); // varied grey
+
+      const puff = document.createElement('div');
+      puff.style.position = 'absolute';
+      puff.style.left = x+'px';
+      puff.style.top = y+'px';
+      puff.style.width = size+'px';
+      puff.style.height = size+'px';
+      puff.style.marginLeft = (-size/2)+'px';
+      puff.style.marginTop = (-size/2)+'px';
+      puff.style.borderRadius = '50%';
+      puff.style.background = `rgba(${shade},${shade},${shade},0.55)`;
+      puff.style.pointerEvents = 'none';
+      puff.style.zIndex = '150';
+      puff.style.opacity = '0';
+      container.appendChild(puff);
+
+      setTimeout(()=>{
+        const anim = puff.animate([
+          { transform:'translate(0,0) scale(0.4)', opacity:0.7, offset:0 },
+          { transform:`translate(${driftX*0.5}px, ${driftY*0.5}px) scale(1)`, opacity:0.5, offset:0.5 },
+          { transform:`translate(${driftX}px, ${driftY}px) scale(1.6)`, opacity:0, offset:1 }
+        ], { duration: D(1000), easing:'ease-out' });
+        anim.onfinish = ()=> puff.remove();
+      }, delay);
+    }
+  }
+
+  function spawnShockwave(container, x, y, color){
+    const size = 40, dots = 10;
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = x+'px';
+    wrapper.style.top = y+'px';
+    wrapper.style.width = size+'px';
+    wrapper.style.height = size+'px';
+    wrapper.style.marginLeft = (-size/2)+'px';
+    wrapper.style.marginTop = (-size/2)+'px';
+    wrapper.style.pointerEvents = 'none';
+    wrapper.style.zIndex = '110';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+    const cx = size/2, cy = size/2, r = size/2-4;
+    for(let i=0;i<dots;i++){
+      const angle = (i/dots)*Math.PI*2;
+      const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      circle.setAttribute('cx', cx + r*Math.cos(angle));
+      circle.setAttribute('cy', cy + r*Math.sin(angle));
+      circle.setAttribute('r', 1.25);
+      circle.setAttribute('fill', color);
+      svg.appendChild(circle);
+    }
+    wrapper.appendChild(svg);
+    container.appendChild(wrapper);
+
+    const anim = wrapper.animate([
+      { transform:'scale(0.2)', opacity:1 },
+      { transform:'scale(3.85)', opacity:0 }
+    ], { duration: D(300), easing:'ease-out' });
+    anim.onfinish = ()=> wrapper.remove();
+  }
+
+  function spawnFirework(container, x, y, color){
+    const size = 90, dots = 12;
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = x+'px';
+    wrapper.style.top = y+'px';
+    wrapper.style.width = size+'px';
+    wrapper.style.height = size+'px';
+    wrapper.style.pointerEvents = 'none';
+    wrapper.style.zIndex = '110';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+    const cx = size/2, cy = size/2, r = size/2-6;
+    for(let i=0;i<dots;i++){
+      const angle = (i/dots)*Math.PI*2;
+      const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      circle.setAttribute('cx', cx + r*Math.cos(angle));
+      circle.setAttribute('cy', cy + r*Math.sin(angle));
+      circle.setAttribute('r', 3);
+      circle.setAttribute('fill', color);
+      svg.appendChild(circle);
+    }
+    wrapper.appendChild(svg);
+    container.appendChild(wrapper);
+
+    const t = (y2,s)=> `translate(-50%,-50%) translateY(${y2}px) scale(${s})`;
+    const anim = wrapper.animate([
+      { transform:t(10,0.1),  opacity:1, offset:0 },
+      { transform:t(-45,0.7), opacity:1, offset:0.5 },
+      { transform:t(-65,1),   opacity:1, offset:0.75 },
+      { transform:t(-40,1),   opacity:0, offset:1 }
+    ], { duration: D(1400), easing:'ease-out' });
+    anim.onfinish = ()=> wrapper.remove();
+  }
+
+  let fireworksInterval = null;
+
+  function shootFirework(){
+    const rect = boardWrap.getBoundingClientRect();
+    const colors = Object.values(PALETTE);
+    const x = 30 + Math.random()*(rect.width-60);
+    const y = rect.height*0.3 + Math.random()*(rect.height*0.35);
+    const color = colors[Math.floor(Math.random()*colors.length)];
+    spawnFirework(boardWrap, x, y, color);
+  }
+
+  function launchFireworks(){
+    for(let i=0;i<6;i++){ setTimeout(shootFirework, i*180); }
+    clearInterval(fireworksInterval);
+    fireworksInterval = setInterval(shootFirework, 1000);
+  }
+
+  function stopFireworks(){
+    clearInterval(fireworksInterval);
+    fireworksInterval = null;
+  }
+
+  function checkWin(){
+    if(remaining <= 0){
+      if(levelHadMistake){
+        perfectStreak = 0;
+      } else {
+        perfectStreak++;
+        if(perfectStreak >= 3){
+          perfectStreak = 0;
+          diffusersAvailable++;
+          logMove(`Earned a Tile Killer charge (now have ${diffusersAvailable})`);
+        }
+      }
+      renderDiffuser();
+      overlayWin.classList.add('show');
+      launchFireworks();
+    }
+  }
+
+  document.getElementById('btn-debug-toggle').addEventListener('click', ()=>{
+    document.getElementById('debug-panel').classList.toggle('show');
+  });
+  document.getElementById('btn-preview-rescale').addEventListener('click', (e)=>{
+    const on = document.body.classList.toggle('preview-shrink');
+    e.target.textContent = `Preview Rescale: ${on ? 'On' : 'Off'}`;
+  });
+  document.getElementById('btn-debug-restart').addEventListener('click', ()=>{
+    startLevel();
+  });
+  document.getElementById('btn-debug-solve').addEventListener('click', ()=>{
+    debugSolve();
+  });
+  document.getElementById('btn-logs').addEventListener('click', ()=>{
+    const report = `Slide Match debug report\nLevel: ${level}  Lives: ${lives}  Remaining tiles: ${remaining}\n\nRecent moves (oldest first):\n${moveLog.join('\n') || '(none yet)'}\n\nCurrent board (. = empty):\n${boardSnapshot()}`;
+    const btn = document.getElementById('btn-logs');
+    const showCopied = ()=>{ const old=btn.textContent; btn.textContent='Copied!'; setTimeout(()=>{ btn.textContent=old; }, 1200); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(report).then(showCopied).catch(()=>{
+        const ta = document.createElement('textarea');
+        ta.value = report; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); }catch(err){}
+        document.body.removeChild(ta);
+        showCopied();
+      });
+    }
+  });
+
+  document.getElementById('btn-hint').addEventListener('click', ()=>{
+    showHint();
+  });
+  document.getElementById('btn-help').addEventListener('click', ()=>{
+    document.getElementById('tutorial-overlay').classList.add('show');
+  });
+  document.getElementById('tutorial-overlay').addEventListener('click', ()=>{
+    document.getElementById('tutorial-overlay').classList.remove('show');
+  });
+  document.getElementById('btn-diffuser').addEventListener('click', ()=>{
+    toggleTileKiller();
+  });
+  document.getElementById('btn-restart').addEventListener('click', ()=>{
+    showTitleScreen(true);
+  });
+  document.getElementById('btn-next').addEventListener('click', ()=>{
+    level++;
+    startLevel();
+  });
+
+  window.addEventListener('error', (e)=>{
+    logMove(`JS ERROR: ${e.message}`);
+    setAnimating(false);
+  });
+  window.addEventListener('unhandledrejection', (e)=>{
+    const msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason);
+    logMove(`PROMISE ERROR: ${msg}`);
+    setAnimating(false);
+  });
+
+  updateBoardScale(); // run once before first render, per Height-First Auto-Scaling
+
+  // game starts once the player taps the title screen's Continue button
+})();
+</script>
+</body>
+</html>
