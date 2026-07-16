@@ -1,0 +1,2013 @@
+<!DOCTYPE html>
+<!--
+  LANE CHOMPER
+
+  Version log (trimmed to last 10 entries):
+  v0.73 - TEMP: BONK_TONE_HZ 110 -> 440 (A4 instead of A2), to test
+         whether the original silence was a frequency-audibility issue
+         on the user's device/ears rather than a code bug. Revert to
+         110 (or wherever it ends up sounding right) once confirmed.
+  v0.74 - Confirmed via the A4 test: the bonk was working correctly the
+         whole time, just inaudible at 110Hz (A2) on the user's phone
+         speaker. Settled on 220Hz (A3) — deep enough to still read as
+         a bonk/thud rather than a chime, but a full octave clear of
+         the frequency that was getting swallowed by the hardware.
+         Removed all BONK-DEBUG trace logging added in v0.71/v0.72 now
+         that the bug is confirmed fixed and understood.
+  v0.75 - Added ±1 semitone random pitch variation to each bonk, so
+         repeated bonks don't all sound identically flat — same gentle-
+         randomization idea Stack Tones already uses for single-piece
+         landings. Applied consistently to both the fundamental and its
+         octave-up partial (same random offset for both, computed once
+         per call) so the two stay in tune with each other.
+  v0.76 - Changed the variation from a subtle ±1 semitone wobble to a
+         full octave jump per request — some bonks now play a full
+         octave higher (50/50 random) instead of just a small pitch
+         wiggle. Kept the floor at BONK_TONE_HZ (220Hz/A3) rather than
+         also allowing an octave DOWN, since 110Hz was the exact
+         frequency already confirmed inaudible on a real phone speaker
+         earlier this session — randomly dropping into that range half
+         the time would have reintroduced the original silent-bonk bug.
+  v0.77 - Replaced the octave-toggle with a 4-note random pool per
+         request (A2/B2/C3/D3). Flagged before building: those exact
+         notes (110/123.47/130.81/146.83Hz) sit in the same low range
+         already confirmed inaudible on the user's phone — B2/C3/D3 are
+         only 12-27% higher than the tested-silent A2, almost certainly
+         the same speaker rolloff. Per the user's go-ahead, shifted the
+         whole pool up one octave (A3/B3/C4/D4 = 220/246.94/261.63/
+         293.66Hz) to land in the confirmed-audible range while keeping
+         the same relative note pattern. Each note still gets its own
+         octave-up partial layered in for extra clarity, same as before.
+  v0.78 - Added the user-provided "Dizzy Whirl" sound (playDizzyWhirl),
+         triggered alongside playSpinAnimation whenever a same-color
+         parked fish gets the pass-by spin. Cartoonish "seeing stars"
+         effect: a triangle-wave carrier sliding downward in pitch
+         overall, with a fast vibrato LFO (10-16Hz) wobbling the pitch
+         on top for the "spinning" character, a slower tremolo LFO
+         (7-12Hz) wobbling volume for a woozy flutter, plus a quiet
+         octave+fifth-up chime layer for sparkle. ~0.8s total — longer
+         than SPIN_DURATION_MS (550ms) so the sound tails off slightly
+         after the visual spin finishes, reading as a lingering dizzy
+         aftereffect rather than an abrupt cutoff. Ported directly from
+         the user's test file with no changes beyond renaming ctx ->
+         audioCtx and ensureAudio() -> the game's existing audioCtx/
+         soundMuted guards. Verified in a real browser (constructed
+         pass-through scenario) that it fires exactly once per spin.
+  v0.79 - Fixed a real bug: the victory jingle/fireworks could play
+         more than once per win. checkWin() had no guard against being
+         called multiple times, and it legitimately CAN be — an auto-
+         launch cascade means several fish can each finish their own
+         slide and call onSlideEnd() -> checkWin() shortly after the
+         board's already empty, and each call independently scheduled
+         its own onWin() via coastAwayFish()'s setTimeout. Added a
+         module-level hasWon flag: checkWin() returns immediately if
+         already true, set once coastAwayFish() actually starts, and
+         reset to false in newBoard() (all three restart paths —
+         Next Board, debug New Board, Shuffle — already call newBoard(),
+         so no stuck-state risk).
+         Also reduced the Dizzy Whirl's overall volume by 40% per
+         request: tremoloDepth and tremoloBase scaled together (0.12->
+         0.072, 0.22->0.132) to keep the tremolo's relative wobble
+         depth consistent rather than just shrinking the base and
+         leaving the wobble proportionally deeper, plus the chime
+         layer's peak gain (0.08->0.048) scaled the same amount.
+  v0.80 - Added the Home button per project's Standard Game Layout doc.
+         This game has no action row, so per the doc's fallback case,
+         Home gets its own #action-row wrapper directly under
+         #board-wrap. Exact visual spec from the doc: hollow rounded
+         rect, purple (#64534) outline+text, "Home" text only (no
+         icon), href="../" (fixed link to the hub, per the doc — not a
+         per-project placeholder), flush with the board's left edge.
+         Adapted the wrapper's width to this game's actual board-width
+         convention (min(92vw,420px), matching #board-wrap directly)
+         rather than the doc's --board-max-w CSS variable, since this
+         game doesn't use that variable system. Verified in a real
+         browser: board and Home button left edges match exactly.
+  v0.81 - Reworked the button layout per request:
+         - Home row (#action-row) is now horizontal: Home + Mute
+           grouped on the left, Reset on the far right (flush with the
+           board's right edge). Mute moved out of the fixed bottom-left
+           screen-space cluster into this game-space row; restyled to
+           match Home's hollow-purple family instead of its old
+           low-contrast debug-adjacent look.
+         - btn-shuffle (the ↻ icon) removed entirely, replaced by
+           #btn-reset — a standard hollow purple rounded rectangle with
+           the text "Reset", same visual family as Home, per request.
+         - Added a Level counter + Info button row directly under the
+           title, in the exact position Standard Game Layout specifies
+           for the Info row (Level counter left, Info button far right
+           flush with the board's right edge). Info button built to the
+           doc's exact spec (26px hollow purple circle, single "?",
+           reserved for a future tutorial overlay — currently a no-op
+           stub, matching the doc's note that the button is part of the
+           base standard even before tutorial content exists).
+         - Level counter: increments when advancing via "Next Board"
+           (i.e. on winning), resets to 0 via the new Reset button.
+           Debug panel's own "New Board" button intentionally left
+           alone — it's a dev tool, not a player-facing reset, so it
+           doesn't touch the level count.
+         - Debug button reclaimed its original left:6px fixed position
+           now that Mute no longer needs to sit beside it.
+         Verified all alignments in a real browser: Home/Level-counter
+         left edges match the board's left edge exactly; Reset/Info
+         right edges match the board's right edge exactly.
+  v0.82 - Wired the Info button to an actual "How to Play" popup
+         (previously a stub). Card-style overlay reusing the existing
+         .overlay pattern (fixed, dark backdrop, fade transition) with
+         a dedicated .overlay.info variant — centered card instead of
+         the win screen's full-bleed text, small circular X close
+         button top-right. Copy iterated with the user to be accurate
+         to the actual ruleset (verified computeFishRun/nudgeFish
+         directly): triangles eat their own color, pass through same-
+         color triangles and empty cells, stop dead on any mismatch,
+         and a parked triangle really can move again once tapped if
+         its path has genuinely opened up (confirmed nudgeFish is
+         ONLY a shake-in-place for truly-blocked taps, never a
+         reposition — an earlier draft of the copy incorrectly implied
+         repeated taps could scoot a stuck triangle out of the way).
+         Verified open/close in a real browser.
+-->
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Lane Chomper</title>
+<style>
+  :root{
+    --bg:#0d0b1f;
+    --grid-bg:#161331;
+    --text:#eae7ff;
+    --muted:#8a84b8;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    overflow:hidden;
+    touch-action:manipulation;
+  }
+  #app{
+    display:flex; flex-direction:column; align-items:center;
+    min-height:100vh;
+    padding:16px 0 24px;
+  }
+  #game-title{
+    margin:0 0 12px;
+    font-size:22px;
+    font-weight:800;
+    letter-spacing:0.5px;
+    color:var(--text);
+  }
+
+  /* ---- Level row (same position as Standard Game Layout's Info row —
+     directly under the title), Level counter left, Info button right,
+     flush with the board's right edge ---- */
+  #level-row{
+    width:min(92vw, 420px);
+    margin:0 auto 28px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  .level-badge{
+    display:flex;
+    align-items:baseline;
+    gap:6px;
+  }
+  .level-badge .label{
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:1px;
+    color:var(--muted);
+  }
+  .level-badge .value{
+    font-size:16px;
+    font-weight:800;
+    color:var(--text);
+  }
+  /* ---- Info button: hollow circle, purple outline+text ---- */
+  #btn-info{
+    width:26px; height:26px;
+    border-radius:50%;
+    font-size:14px;
+    font-weight:900;
+    border:2px solid #645394;
+    background:transparent;
+    color:#645394;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    padding:0;
+  }
+  #btn-info:active{ background:rgba(100,83,148,0.15); }
+
+  /* ---- Home row: Home + Mute on the left, Reset on the far right ---- */
+  #action-row{
+    position:relative;
+    width:min(92vw, 420px);
+    margin:14px auto 0;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  #action-row .left-group{
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  /* ---- Home button: hollow rounded rect, purple outline+text ---- */
+  #btn-hub{
+    font-size:12px;
+    font-weight:700;
+    padding:6px 12px;
+    border-radius:8px;
+    border:1px solid #645394;
+    background:transparent;
+    color:#645394;
+    text-decoration:none;
+    white-space:nowrap;
+    cursor:pointer;
+  }
+  #btn-hub:active{ background:rgba(100,83,148,0.15); }
+  /* ---- Mute button: sits next to Home, same hollow purple family ---- */
+  #btn-mute{
+    font-size:14px;
+    padding:6px 10px;
+    border-radius:8px;
+    border:1px solid #645394;
+    background:transparent;
+    color:#645394;
+    cursor:pointer;
+  }
+  #btn-mute:active{ background:rgba(100,83,148,0.15); }
+  /* ---- Reset button: hollow rounded rect, same style as Home ---- */
+  #btn-reset{
+    font-size:12px;
+    font-weight:700;
+    padding:6px 12px;
+    border-radius:8px;
+    border:1px solid #645394;
+    background:transparent;
+    color:#645394;
+    white-space:nowrap;
+    cursor:pointer;
+  }
+  #btn-reset:active{ background:rgba(100,83,148,0.15); }
+
+  /* ---------- Board wrap ---------- */
+  #board-wrap{
+    position:relative;
+    width:min(92vw, 420px);
+    display:flex;
+    justify-content:center;
+  }
+  #board-outer{
+    /* row-fish/column-fish are absolutely positioned within this
+       relative-positioned wrapper; #grid sits inside with a margin
+       reserved for the fish track (see layout()) */
+  }
+  #grid{
+    position:relative;
+    background:var(--grid-bg);
+    border-radius:14px;
+    padding:8px;
+    box-shadow:inset 0 0 0 1px #2a2650;
+  }
+  .cell{
+    position:absolute;
+    border-radius:4px;
+    box-shadow:
+      inset -3px -4px 6px rgba(0,0,0,0.3),
+      inset 3px 4px 6px rgba(255,255,255,0.2);
+  }
+
+  /* ---------- Fish ---------- */
+  .fish{
+    position:absolute;
+    z-index:10;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    transition:opacity .15s, filter .15s;
+  }
+  .fish.dead{ cursor:default; }
+  .fish:active:not(.dead){ filter:brightness(1.25); }
+  .fish svg{ display:block; flex-shrink:0; }
+
+  /* ---------- Win / stuck overlay ---------- */
+  .overlay{
+    position:fixed; inset:0;
+    background:rgba(0,0,0,0.88);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px;
+    z-index:100;
+    visibility:hidden;
+    opacity:0;
+    transition:opacity 0.2s;
+  }
+  .overlay.show{ visibility:visible; opacity:1; }
+  .overlay h2{ margin:0; font-size:28px; letter-spacing:1px; position:relative; z-index:1; }
+  .overlay button{
+    font-size:16px; font-weight:700; padding:10px 22px;
+    border-radius:8px; border:none;
+    background:#3a8bff; color:white; cursor:pointer;
+    position:relative; z-index:1;
+  }
+  .overlay.win h2{
+    color:#2ecc71; font-weight:900; font-size:34px;
+    text-shadow:0 0 10px rgba(46,204,113,0.6), 0 2px 0 #0a3d1f;
+  }
+
+  /* ---------- How to Play info overlay ---------- */
+  .overlay.info .info-card{
+    position:relative;
+    width:min(85vw, 340px);
+    background:var(--grid-bg);
+    border:1px solid #322c66;
+    border-radius:14px;
+    padding:24px 20px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.5);
+  }
+  .overlay.info h2{
+    font-size:18px;
+    margin:0 0 12px;
+    color:var(--text);
+  }
+  .overlay.info p{
+    font-size:14px;
+    line-height:1.5;
+    color:var(--text);
+    margin:0;
+  }
+  #btn-info-close{
+    position:absolute;
+    top:8px; right:8px;
+    width:24px; height:24px;
+    border-radius:50%;
+    border:1px solid #322c66;
+    background:transparent;
+    color:var(--muted);
+    font-size:14px;
+    font-weight:700;
+    padding:0;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+  }
+  #btn-info-close:active{ background:rgba(255,255,255,0.05); }
+
+  /* ---------- Preview scaling ---------- */
+  body.preview-shrink #board-wrap{
+    width:min(73.6vw, 336px) !important;
+  }
+
+  /* ---------- Debug button ---------- */
+  #btn-debug-toggle{
+    position:fixed; left:6px; bottom:6px; z-index:300;
+    font-size:10px; font-weight:700; padding:3px 8px;
+    border-radius:5px; border:1px solid #2a2a2a;
+    background:transparent; color:#4a4570; cursor:pointer;
+  }
+  #btn-debug-toggle:active{ background:rgba(255,255,255,0.05); }
+  #debug-panel{
+    position:fixed; left:6px; bottom:32px; z-index:300;
+    display:none; flex-direction:column; gap:4px;
+    max-height:70vh; overflow-y:auto;
+  }
+  #debug-panel.show{ display:flex; }
+  #debug-panel button{
+    font-size:10px; font-weight:700; padding:3px 8px;
+    border-radius:5px; border:1px solid #444;
+    background:#1b2830; color:#888; cursor:pointer; text-align:left;
+  }
+  #debug-panel button:active{ background:#243440; }
+  #debug-log{
+    font-size:9px; color:#666; background:#111;
+    padding:4px; border-radius:4px; max-width:200px;
+    max-height:120px; overflow-y:auto; white-space:pre-wrap;
+    font-family:monospace;
+  }
+
+  /* ---------- Logs modal ---------- */
+  #logs-modal{
+    position:fixed; inset:0; z-index:400;
+    background:rgba(0,0,0,0.85);
+    display:none;
+    align-items:center; justify-content:center;
+    padding:20px;
+  }
+  #logs-modal.show{ display:flex; }
+  #logs-modal-inner{
+    background:#161331; border-radius:12px;
+    width:100%; max-width:480px;
+    max-height:80vh;
+    display:flex; flex-direction:column;
+    box-shadow:0 0 0 1px #2a2650;
+  }
+  #logs-modal-header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 14px;
+    font-size:13px; font-weight:700; color:var(--text);
+    border-bottom:1px solid #2a2650;
+  }
+  #btn-logs-close{
+    background:none; border:none; color:var(--text);
+    font-size:22px; line-height:1; cursor:pointer; padding:0 4px;
+  }
+  #logs-textarea{
+    flex:1;
+    margin:10px 14px;
+    background:#0d0b1f; color:#9fe8a8;
+    border:1px solid #2a2650; border-radius:8px;
+    font-family:monospace; font-size:10px;
+    padding:8px;
+    resize:none;
+    min-height:260px;
+    white-space:pre;
+  }
+  #logs-modal-hint{
+    text-align:center; color:var(--muted);
+    font-size:11px; padding:0 14px 12px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1 id="game-title">Lane Chomper</h1>
+  <div id="level-row">
+    <div class="level-badge">
+      <span class="label">LEVEL</span>
+      <span class="value" id="level-count">0</span>
+    </div>
+    <button id="btn-info">?</button>
+  </div>
+  <div id="board-wrap">
+    <div id="board-outer">
+      <div id="grid"></div>
+    </div>
+  </div>
+  <div id="action-row">
+    <div class="left-group">
+      <a id="btn-hub" href="../">Home</a>
+      <button id="btn-mute">🔊</button>
+    </div>
+    <button id="btn-reset">Reset</button>
+  </div>
+</div>
+
+<div class="overlay win" id="overlay-win">
+  <h2>Board Cleared!</h2>
+  <button id="btn-next">Next Board</button>
+</div>
+
+<div class="overlay info" id="overlay-info">
+  <div class="info-card">
+    <button id="btn-info-close">&times;</button>
+    <h2>How to Play</h2>
+    <p>Tap the triangles to clear the way. Figure out the best traffic
+    order. Triangles only eat their own color and stop if blocked by
+    another. You can tap a parked triangle out of the way if there is
+    room for it to move.</p>
+  </div>
+</div>
+
+<button id="btn-debug-toggle">Debug</button>
+<div id="debug-panel">
+  <button id="btn-debug-restart">New Board</button>
+  <button id="btn-debug-solve">Auto-Solve Step</button>
+  <button id="btn-debug-reveal">Toggle Solution Order</button>
+  <button id="btn-timing-debug">Timing Debug: Off</button>
+  <button id="btn-logs">Logs</button>
+  <button id="btn-preview-rescale">Preview Rescale: Off</button>
+  <div id="debug-log"></div>
+</div>
+
+<div id="logs-modal">
+  <div id="logs-modal-inner">
+    <div id="logs-modal-header">
+      <span>Game State</span>
+      <button id="btn-logs-close">&times;</button>
+    </div>
+    <textarea id="logs-textarea" readonly></textarea>
+    <div id="logs-modal-hint">Tap the text, select all, copy</div>
+  </div>
+</div>
+
+<script>
+(function(){
+
+  // ============================================================
+  // CONFIG
+  // ============================================================
+  const GRID = 6;
+  const COLORS = {
+    red:    '#ef4444',
+    orange: '#f97316',
+    yellow: '#f2c630',
+    green:  '#3ecf5e',
+    blue:   '#2e8fe6',
+    purple: '#a855f7'
+  };
+  const COLOR_LIST = Object.keys(COLORS);
+
+  let cellSize = 0;
+  let gridPad = 8;
+  let board = [];      // board[y][x] = colorKey or null
+  let animating = new Set(); // fish ids currently mid-slide (block re-tap)
+  let spinning = new Set(); // fish ids currently playing the pass-by spin — kept separate from `animating` (which also blocks re-tap) since a spinning fish is still tappable, just protected from renderFish's rebuild
+  let hiddenCells = new Set(); // "x,y" keys hidden cosmetically but not yet committed to board[][]=null — see render()
+  let hasWon = false; // guards coastAwayFish()/onWin() from firing more than once per board — checkWin() can legitimately be called multiple times in a row (e.g. an auto-launch cascade where several fish each finish their own slide right after the board's already empty), and without this guard each call would independently schedule its own onWin(), causing the victory jingle/fireworks to play multiple times
+  let levelCount = 0; // increments on winning + advancing to the next board (Next Board), reset to 0 by the Reset button
+
+  function updateLevelCount(){
+    document.getElementById('level-count').textContent = levelCount;
+  }
+  updateLevelCount();
+
+  // ============================================================
+  // AUDIO (Stack Tones)
+  // ============================================================
+  let audioCtx = null;
+  let soundMuted = localStorage.getItem('row-chomper-mute') === 'true';
+
+  const BASE_FREQ_HZ = 220;        // A3 (reference only)
+  const SEMITONES_PER_BOX = 4;     // major 3rd interval per piece
+  const SINGLE_PIECE_VARIATION_SEMITONES = [-2, 0, 0, 2];
+  const RANDOM_START_RANGE = 12;   // random starting note within ±12 semitones of base
+
+  function initAudio(){
+    if(!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }
+
+  function landingPitchSemitoneOffset(pitchIndexInGroup, isSinglePieceLand, runStartOffset){
+    let offset = runStartOffset + (pitchIndexInGroup * SEMITONES_PER_BOX);
+    if(isSinglePieceLand){
+      const variation = SINGLE_PIECE_VARIATION_SEMITONES[
+        Math.floor(Math.random() * SINGLE_PIECE_VARIATION_SEMITONES.length)
+      ];
+      offset += variation;
+    }
+    return offset;
+  }
+
+  function landingFrequency(pitchIndexInGroup, isSinglePieceLand, runStartOffset){
+    const semitoneOffset = landingPitchSemitoneOffset(pitchIndexInGroup, isSinglePieceLand, runStartOffset);
+    return BASE_FREQ_HZ * Math.pow(2, semitoneOffset / 12);
+  }
+
+  function playTone(freq, durationSec, startAtSec){
+    if(!audioCtx || soundMuted) return;
+    const now = audioCtx.currentTime + (startAtSec||0);
+    const attack = 0.002;  // faster attack for snap
+    const decay = durationSec * 0.5;  // shorter decay for arcade pop
+
+    const playPartial = (partialFreq, peakGain, partialDecay) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';  // brighter than sine
+      osc.frequency.value = partialFreq;
+
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(peakGain, now + attack);
+      gain.gain.linearRampToValueAtTime(0, now + attack + partialDecay);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + attack + partialDecay + 0.02);
+    };
+
+    playPartial(freq, 0.28, decay);              // louder fundamental
+    playPartial(freq * 2, 0.15, decay * 0.5);   // louder octave-up
+    playPartial(freq * 3, 0.1, decay * 0.35);   // add 12th (extra bite)
+  }
+
+  // Victory jingle: a short rising triumphant arpeggio, using the same
+  // triangle-wave/multi-partial tone as Stack Tones for a consistent
+  // arcade voice. Built as a fixed note sequence (semitone offsets from
+  // A3) rather than any external notation — a simple I-chord-style climb
+  // that resolves upward, reading as a clean "you won" flourish.
+  const VICTORY_NOTE_SEMITONES = [0, 0, 5, 0, 5, 9, 12]; // root-root-fourth-root-fourth-sixth-octave
+  const VICTORY_NOTE_MS = 140;
+
+  function playVictoryJingle(){
+    if(!audioCtx || soundMuted) return;
+    VICTORY_NOTE_SEMITONES.forEach((semitone, i)=>{
+      const freq = BASE_FREQ_HZ * Math.pow(2, semitone/12);
+      const startAtSec = (i * VICTORY_NOTE_MS) / 1000;
+      playTone(freq, VICTORY_NOTE_MS/1000, startAtSec);
+    });
+  }
+
+  // Fish: persistent board entities.
+  //   lane: which row (y) or column (x) index it belongs to
+  //   color: locked in at spawn, never changes
+  //   x,y: current board position (its "home" edge position initially,
+  //        may be off-grid conceptually before first launch — we track
+  //        row-fish at x=-1 and col-fish at y=-1 to mean "at home/edge,
+  //        not yet entered the grid")
+  //   state: 'home' | 'parked' | 'gone'
+  let fish = []; // one per row + one per column = 2*GRID total
+  let debugSolutionOrder = []; // constructed move sequence, for debug reveal only
+  let debugRevealOn = false;
+
+  const gridEl = document.getElementById('grid');
+  const debugLogEl = document.getElementById('debug-log');
+
+  function log(msg){
+    debugLogEl.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + debugLogEl.textContent;
+  }
+
+  // ============================================================
+  // TIMING DEBUG — when on, logs each cell's real measured tip/center
+  // gap at the moment it's eaten (see eatCell() in slideFish), so
+  // disappear timing can be verified on a real device
+  // ============================================================
+  let timingDebugOn = false;
+
+  // ============================================================
+  // LEVEL GENERATION — fish are now real obstacles too
+  //
+  // Two invariants must both hold:
+  //   1. Every cell's color must equal its row-fish's or column-fish's
+  //      locked color (unchanged from before — those are the only two
+  //      things that can ever clear a cell).
+  //   2. A PARKED fish (on-board, stopped mid-lane) is itself an
+  //      obstacle: a different-color crosser stops one cell before it;
+  //      a same-color crosser passes through freely. This means a
+  //      constructed "stop point" is no longer justified by an
+  //      arbitrary short run length — it's only ever real if another
+  //      fish actually ends up parked there. So construction always
+  //      extends each move to the FULL distance currently available
+  //      (bounded only by real obstacles: unpainted-cell limits or an
+  //      already-parked fish), never an arbitrary shorter roll.
+  //      Variety comes naturally from random turn order deciding which
+  //      fish happen to already be parked in each other's way.
+  //   3. Fish can be re-picked after parking (resuming), same as real
+  //      play, since a single one-shot move per fish doesn't guarantee
+  //      full board coverage once other fish are blocking lanes.
+  //   4. After the paint-to-completion loop, a REAL greedy replay
+  //      simulation (using the exact same rules as actual play) checks
+  //      whether the recorded order fully clears the board. If any
+  //      cells remain (this can happen when some fish's own matching
+  //      cells got painted by OTHER fish's moves and that fish itself
+  //      was never included in the order), the sim keeps appending
+  //      whichever fish can still move until the board is genuinely
+  //      empty or nothing can move — guaranteeing debugSolutionOrder is
+  //      always a complete, real, replayable solution.
+  //
+  // Verified via 2000-trial headless simulation: 100% solvable.
+  // ============================================================
+
+  function newBoard(){
+    const rowColor = [], colColor = [];
+    for(let y=0;y<GRID;y++) rowColor.push(COLOR_LIST[Math.floor(Math.random()*COLOR_LIST.length)]);
+    for(let x=0;x<GRID;x++) colColor.push(COLOR_LIST[Math.floor(Math.random()*COLOR_LIST.length)]);
+
+    board = [];
+    for(let y=0;y<GRID;y++) board.push(new Array(GRID).fill(null));
+
+    fish = [];
+    for(let y=0;y<GRID;y++){
+      fish.push({id:'row'+y, axis:'row', lane:y, color:rowColor[y], x:-1, y:y, state:'home'});
+    }
+    for(let x=0;x<GRID;x++){
+      fish.push({id:'col'+x, axis:'col', lane:x, color:colColor[x], x:x, y:-1, state:'home'});
+    }
+
+    // Note: construction doesn't need to track its own solutionOrder
+    // anymore — the board may get mutated afterward by solid-lane-
+    // breaking below, so a fresh greedy solve always runs at the end
+    // to produce the real, guaranteed-correct debugSolutionOrder.
+    const totalCells = GRID*GRID;
+    let paintedCount = 0;
+    let attempts = 0;
+    const maxAttempts = 8000;
+    let stuckStreak = 0;
+
+    while(paintedCount < totalCells && attempts < maxAttempts){
+      attempts++;
+      const movable = fish.filter(f=>f.state==='home' || f.state==='parked');
+      if(movable.length===0) break;
+      const f = movable[Math.floor(Math.random()*movable.length)];
+
+      const startX = f.x, startY = f.y;
+      const maxLen = (f.axis==='row') ? GRID-1-startX : GRID-1-startY;
+      if(maxLen<=0){ f.state='gone'; continue; }
+
+      // Extend as far as REALLY possible: stop only at an already-
+      // parked fish (a genuine obstruction) or an unpainted-cell limit.
+      // No arbitrary short rolls — see design note above.
+      let avail = 0;
+      for(let i=1;i<=maxLen;i++){
+        const cx = f.axis==='row' ? startX+i : startX;
+        const cy = f.axis==='row' ? startY : startY+i;
+        const occupant = fishOccupying(cx, cy, f.id);
+        if(occupant) break; // real stop: another parked fish ahead
+        if(board[cy][cx]!==null) break;
+        avail = i;
+      }
+
+      if(avail===0){
+        // can't move at all right now (immediately blocked) — skip for
+        // this pass without retiring, a later move elsewhere could
+        // still free this fish up.
+        stuckStreak++;
+        if(stuckStreak > movable.length*4) break;
+        continue;
+      }
+      stuckStreak = 0;
+
+      // Cap each move to a short 1-2 cell run instead of always taking
+      // the full available distance. This forces many more individual
+      // moves and dramatically increases how often fish end up parked
+      // in each other's way before the board clears — validated via
+      // simulation to raise average fish-blocks-fish events from ~0 to
+      // ~2.6 per board and roughly quadruple move count, while staying
+      // 100% solvable (partial runs are always valid: parking a fish
+      // early still places a genuine obstacle, it's just placed sooner).
+      const MOVE_CAP_MIN = 1, MOVE_CAP_MAX = 2;
+      const cap = MOVE_CAP_MIN + Math.floor(Math.random()*(MOVE_CAP_MAX-MOVE_CAP_MIN+1));
+      const runLen = Math.min(avail, cap);
+      const cells = [];
+      for(let i=1;i<=runLen;i++){
+        cells.push(f.axis==='row' ? {x:startX+i, y:startY} : {x:startX, y:startY+i});
+      }
+      cells.forEach(c => { board[c.y][c.x] = f.color; paintedCount++; });
+
+      const last = cells[cells.length-1];
+      f.x = last.x; f.y = last.y;
+      const reachedWall = (f.axis==='row') ? (last.x===GRID-1) : (last.y===GRID-1);
+
+      f.state = reachedWall ? 'gone' : 'parked';
+    }
+
+    // Fill any leftover unpainted cells (rare) respecting the
+    // reachability invariant: row color or column color, never neither.
+    for(let y=0;y<GRID;y++){
+      for(let x=0;x<GRID;x++){
+        if(board[y][x]===null){
+          board[y][x] = Math.random()<0.5 ? rowColor[y] : colColor[x];
+        }
+      }
+    }
+
+    // Reusable greedy solver: given a board, simulate every fish
+    // starting fresh from home and repeatedly advance whichever one can
+    // currently move, until the board empties or nothing can proceed.
+    // Used both to verify solid-lane-breaking swaps below (a swap is
+    // only kept if the board STILL fully solves afterward) and to
+    // produce the final debugSolutionOrder.
+    function greedySolve(){
+      const simBoard = board.map(row => row.slice());
+      const simFish = fish.map(f => ({...f, state:'home', x: f.axis==='row'?-1:f.lane, y: f.axis==='row'?f.lane:-1}));
+
+      function simOccupying(x, y, excludeId){
+        for(const other of simFish){
+          if(other.id===excludeId) continue;
+          if(other.state!=='parked') continue;
+          if(other.x===x && other.y===y) return other;
+        }
+        return null;
+      }
+      function simComputeRun(f){
+        const color = f.color;
+        const run = [];
+        if(f.axis==='row'){
+          let cx=f.x+1, lastPassable=f.x;
+          while(cx<GRID){
+            const blocker = simOccupying(cx, f.y, f.id);
+            if(blocker){ if(blocker.color===color){ lastPassable=cx; cx++; continue; } break; }
+            const cell = simBoard[f.y][cx];
+            if(cell===color){ run.push({x:cx,y:f.y}); lastPassable=cx; cx++; }
+            else if(cell===null){ lastPassable=cx; cx++; }
+            else break;
+          }
+          const exits = cx>=GRID;
+          return {run, stopX: exits?GRID:lastPassable, stopY:f.y, exits};
+        } else {
+          let cy=f.y+1, lastPassable=f.y;
+          while(cy<GRID){
+            const blocker = simOccupying(f.x, cy, f.id);
+            if(blocker){ if(blocker.color===color){ lastPassable=cy; cy++; continue; } break; }
+            const cell = simBoard[cy][f.x];
+            if(cell===color){ run.push({x:f.x,y:cy}); lastPassable=cy; cy++; }
+            else if(cell===null){ lastPassable=cy; cy++; }
+            else break;
+          }
+          const exits = cy>=GRID;
+          return {run, stopX:f.x, stopY: exits?GRID:lastPassable, exits};
+        }
+      }
+
+      const order = [];
+      let guard = 0;
+      while(simBoard.some(row=>row.some(c=>c!==null)) && guard<500){
+        guard++;
+        let moved = false;
+        for(const f of simFish){
+          if(f.state==='gone') continue;
+          const {run, stopX, stopY, exits} = simComputeRun(f);
+          if(stopX===f.x && stopY===f.y) continue;
+          run.forEach(c=>{ simBoard[c.y][c.x]=null; });
+          f.x=stopX; f.y=stopY;
+          f.state = exits ? 'gone' : 'parked';
+          order.push(f.id);
+          moved = true;
+          break;
+        }
+        if(!moved) break;
+      }
+      const cleared = !simBoard.some(row=>row.some(c=>c!==null));
+      return {cleared, order};
+    }
+
+    // Break up SOME (not all) fully-solid rows/columns so trivial
+    // one-tap lanes become rarer without disappearing entirely — found
+    // via playtesting that construction could accidentally produce a
+    // fully solid lane just from independent crossing fish coincidentally
+    // sharing a color (more likely with a small palette). A swap is only
+    // ever COMMITTED if the board still fully solves afterward (checked
+    // via greedySolve above), so this can never introduce an unsolvable
+    // board — if a candidate swap breaks solvability, it's reverted and
+    // a different candidate cell is tried instead.
+    const KEEP_SOLID_CHANCE = 0.25; // ~1 in 4 solid lanes stay solid as an easy breather
+
+    function trySwap(y, x, newColor){
+      const old = board[y][x];
+      if(old===newColor) return false;
+      board[y][x] = newColor;
+      const {cleared} = greedySolve();
+      if(cleared) return true;
+      board[y][x] = old; // revert — this swap breaks solvability
+      return false;
+    }
+
+    for(let y=0;y<GRID;y++){
+      if(board[y].every(c=>c===board[y][0])){
+        if(Math.random()<KEEP_SOLID_CHANCE) continue;
+        const candidates = [];
+        for(let x=1;x<GRID;x++){ if(colColor[x]!==board[y][x]) candidates.push(x); }
+        for(let i=candidates.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [candidates[i],candidates[j]]=[candidates[j],candidates[i]]; }
+        for(const x of candidates){ if(trySwap(y, x, colColor[x])) break; }
+      }
+    }
+    for(let x=0;x<GRID;x++){
+      const col = board.map(row=>row[x]);
+      if(col.every(c=>c===col[0])){
+        if(Math.random()<KEEP_SOLID_CHANCE) continue;
+        const candidates = [];
+        for(let y=1;y<GRID;y++){ if(rowColor[y]!==board[y][x]) candidates.push(y); }
+        for(let i=candidates.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [candidates[i],candidates[j]]=[candidates[j],candidates[i]]; }
+        for(const y of candidates){ if(trySwap(y, x, rowColor[y])) break; }
+      }
+    }
+
+    // Reset fish to home for actual play.
+    fish.forEach(f=>{
+      f.state = 'home';
+      if(f.axis==='row') f.x=-1; else f.y=-1;
+    });
+
+    // Final solve: the board may have been mutated by lane-breaking
+    // above, so run the greedy solver fresh (rather than trying to
+    // patch construction's original solutionOrder through a mutation)
+    // to get a guaranteed-correct, complete solution order.
+    const finalSolve = greedySolve();
+    const solutionOrder = finalSolve.order;
+
+    debugSolutionOrder = solutionOrder;
+    animating.clear();
+    spinning.clear();
+    hiddenCells.clear();
+    hasWon = false;
+    layout();
+    render();
+    log(`New board generated (${solutionOrder.length} moves in solution)`);
+  }
+
+  // ============================================================
+  // LAYOUT
+  // Reserve one extra row (top) for column-fish and one extra column
+  // (left) for row-fish, sized as a fraction of a cell.
+  // ============================================================
+  const FISH_TRACK_RATIO = 0.62; // fish track thickness relative to a cell
+
+  function layout(){
+    const wrapRect = document.getElementById('board-wrap').getBoundingClientRect();
+    const totalW = wrapRect.width;
+
+    // total width = fishTrack + GRID*cellSize + pad*2
+    // solve cellSize such that everything fits totalW
+    const unknownsSum = GRID + FISH_TRACK_RATIO; // in units of cellSize
+    cellSize = (totalW - gridPad*2) / unknownsSum;
+
+    const gridPx = cellSize*GRID + gridPad*2;
+    const trackPx = cellSize*FISH_TRACK_RATIO;
+
+    gridEl.style.width = gridPx+'px';
+    gridEl.style.height = gridPx+'px';
+    gridEl.style.marginLeft = trackPx+'px';
+    gridEl.style.marginTop = trackPx+'px';
+
+    document.getElementById('board-outer').style.position = 'relative';
+  }
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+  function render(){
+    gridEl.innerHTML = '';
+
+    // background + filled cells (empty cells render nothing — no grey
+    // placeholder tile once a cell has been cleared)
+    for(let y=0;y<GRID;y++){
+      for(let x=0;x<GRID;x++){
+        const key = x+','+y;
+        const color = board[y][x];
+        if(!color) continue;
+        const c = document.createElement('div');
+        c.className = 'cell';
+        const circleSize = (cellSize-4)/2 * 1.15; // scaled up 15%
+        c.style.width = circleSize+'px';
+        c.style.height = circleSize+'px';
+        c.style.left = gridPad + x*cellSize + (cellSize-circleSize)/2 + 'px';
+        c.style.top = gridPad + y*cellSize + (cellSize-circleSize)/2 + 'px';
+        c.style.background = radialFor(color);
+        // A cell can be cosmetically hidden (mid-fade-out from a
+        // different, still-animating fish) before board[][] actually
+        // commits it to null. Without this check, a render() triggered
+        // by a CONCURRENT fish finishing would rebuild this cell fresh
+        // from board[][] (still showing its old color) and visibly
+        // "pop it back" until the original fish's own onSlideEnd
+        // eventually commits and re-renders again. Force it hidden here
+        // too, so a mid-flight cell never flickers back during a
+        // concurrent render.
+        if(hiddenCells.has(key)){
+          c.style.opacity = '0';
+        }
+        c.dataset.x = x; c.dataset.y = y;
+        gridEl.appendChild(c);
+      }
+    }
+
+    renderFish();
+  }
+
+  function radialFor(colorKey){
+    const c = COLORS[colorKey];
+    return `radial-gradient(circle at 32% 28%, ${lighten(c,40)}, ${c} 55%, ${darken(c,25)})`;
+  }
+  function lighten(hex, amt){ return shiftColor(hex, amt); }
+  function darken(hex, amt){ return shiftColor(hex, -amt); }
+  function shiftColor(hex, amt){
+    const num = parseInt(hex.slice(1),16);
+    let r = (num>>16) + amt, g = (num>>8 & 0xff) + amt, b = (num & 0xff) + amt;
+    r = Math.max(0,Math.min(255,r)); g = Math.max(0,Math.min(255,g)); b = Math.max(0,Math.min(255,b));
+    return '#' + ((1<<24) + (r<<16) + (g<<8) + b).toString(16).slice(1);
+  }
+
+  function fishSVG(colorKey, dir, svgW, svgH){
+    const fill = colorKey ? COLORS[colorKey] : '#3a3660';
+    const rot = dir==='right' ? 0 : 90;
+    // Rotation lives on a WRAPPER div, scale (used by the bonk
+    // animation) lives on the SVG itself, inside that wrapper. Keeping
+    // them on separate elements means the bonk's scale always operates
+    // in the SVG's own unrotated local frame — no compounding rotate+
+    // scale around a shared transform-origin, which was the actual
+    // cause of a real bug where the "nose" visibly drifted position
+    // during the widen phase (scaling and rotating together around the
+    // same pivot point does NOT keep that point pinned to the same
+    // edge of the final bounding box once the scale is non-uniform).
+    return `<div style="transform:rotate(${rot}deg); display:flex;">
+      <svg viewBox="0 0 40 30" width="${svgW}" height="${svgH}" style="display:block; transform-origin:100% 50%;">
+        <polygon points="0,0 0,30 38,15" fill="${fill}"/>
+      </svg>
+    </div>`;
+  }
+
+  // Screen-space position for a fish given its board x,y (supports the
+  // off-grid "home" position of x=-1 or y=-1, and one-past-the-edge exit
+  // positions used only transiently during the exit animation).
+  function fishScreenPos(f){
+    const trackPx = cellSize*FISH_TRACK_RATIO;
+    // Both row and col fish render the same landscape-shaped artwork
+    // (viewBox="0 0 40 30") into their SVG box — CSS rotate() doesn't
+    // change the box an element renders into, it only repaints the
+    // already-rendered picture at an angle. So the SVG itself always
+    // needs a landscape box (long, short) regardless of axis, or the
+    // art gets squashed to fit a mismatched shape (this was a real bug:
+    // row fish previously got a portrait box, causing heavy letterbox-
+    // shrink and making them visibly smaller/more distorted than col
+    // fish, which happened to already get a landscape box).
+    const long = cellSize*0.7, short = trackPx*0.9;
+    const svgW = long, svgH = short; // SVG's own box: always landscape, matching the art's native viewBox ratio, regardless of axis or rotation
+    if(f.axis==='row'){
+      // No rotation — the landscape box IS the on-screen box (nose
+      // points right, long dimension = width).
+      const w = long, h = short;
+      const left = trackPx + gridPad + f.x*cellSize + (cellSize-w)/2;
+      const top  = trackPx + gridPad + f.y*cellSize + (cellSize-h)/2;
+      return {left, top, w, h, svgW, svgH};
+    } else {
+      // Rotates 90° — the SVG's own box is still landscape (long, short)
+      // internally, but appears portrait on screen once rotated, so the
+      // ON-SCREEN bounding box used for positioning is (short, long)
+      // instead. The <svg> element itself still gets explicit width/
+      // height set to the pre-rotation (long, short) box — only the
+      // outer .fish div's positioning box swaps.
+      const w = short, h = long;
+      const left = trackPx + gridPad + f.x*cellSize + (cellSize-w)/2;
+      const top  = trackPx + gridPad + f.y*cellSize + (cellSize-h)/2;
+      return {left, top, w, h, svgW, svgH};
+    }
+  }
+
+  function renderFish(){
+    const outer = document.getElementById('board-outer');
+    // CRITICAL: only remove/rebuild fish elements that are NOT currently
+    // mid-slide. Multiple fish can be animating at once (the player can
+    // tap a second fish before the first one's slide finishes), and
+    // fishScreenPos() always reflects a fish's LAST COMMITTED position —
+    // for an animating fish that's still its pre-move position, since
+    // commit only happens in that fish's own onSlideEnd. Rebuilding an
+    // animating fish's element mid-flight would destroy its running CSS
+    // transition and reset it to the stale pre-move spot (a visible
+    // snap-back stutter), and could also drop its transitionend
+    // listener, potentially leaving it stuck in `animating` forever.
+    // Skipping animating fish here means their own onSlideEnd is always
+    // what finalizes their DOM position — this render() only ever
+    // touches fish that are safely at rest.
+    // Also skips fish in `spinning` — a fish playing the pass-by spin
+    // flourish (see playSpinAnimation/spinning Set) is already at its
+    // correct final position (it's parked, not moving), so rebuilding
+    // it mid-spin would tear the animation out for purely cosmetic
+    // reasons. Unlike `animating`, being in `spinning` does NOT block
+    // re-tapping the fish — see launchFish.
+    outer.querySelectorAll('.fish').forEach(el=>{
+      if(!animating.has(el.dataset.id) && !spinning.has(el.dataset.id)) el.remove();
+    });
+
+    fish.forEach(f=>{
+      if(f.state==='gone') return;
+      if(animating.has(f.id)) return; // leave its in-flight element alone
+      if(spinning.has(f.id)) return; // leave its in-flight spin alone
+      const dead = isFishDead(f);
+      const el = document.createElement('div');
+      el.className = 'fish' + (dead?' dead':'');
+      el.dataset.id = f.id;
+      const pos = fishScreenPos(f);
+      el.style.width = pos.w+'px';
+      el.style.height = pos.h+'px';
+      el.style.left = pos.left+'px';
+      el.style.top = pos.top+'px';
+      const dir = f.axis==='row' ? 'right' : 'down';
+      el.innerHTML = fishSVG(f.color, dir, pos.svgW, pos.svgH); // color is locked from spawn, always known
+      if(!dead){
+        el.addEventListener('click', ()=> launchFish(f.id));
+      }
+      if(debugRevealOn){
+        const firstIdx = debugSolutionOrder.indexOf(f.id);
+        if(firstIdx!==-1){
+          const tag = document.createElement('div');
+          tag.style.cssText = 'position:absolute;top:-6px;right:-6px;background:#000;color:#fff;font-size:10px;font-weight:800;border-radius:50%;width:16px;height:16px;display:flex;align-items:center;justify-content:center;z-index:5;pointer-events:none;';
+          tag.textContent = firstIdx+1;
+          el.appendChild(tag);
+        }
+      }
+      outer.appendChild(el);
+
+      if(f.pendingBonk){
+        // Play the bonk on THIS freshly created element, now that it's
+        // in the DOM at its correct final resting position. Playing it
+        // on the pre-render element (as an earlier version of this did)
+        // raced with render()'s own rebuild cycle: keeping the fish
+        // artificially flagged `animating` to protect the animation
+        // from being torn out caused a real, observed bug where a
+        // DIFFERENT fish's concurrent render() call could still leave
+        // this fish's position visually wrong. Consuming the flag here
+        // instead means the bonk always plays on a stable, correctly-
+        // positioned, already-final element with no rebuild race
+        // possible — nothing else can rebuild it mid-bonk since a fish
+        // at rest is idempotently re-rendered to the same position
+        // every time anyway.
+        f.pendingBonk = false;
+        playBonkAnimation(el);
+      }
+    });
+  }
+
+  // A fish is "dead" (dimmed, untappable) only when it currently has
+  // zero legal movement — not merely blocked one cell ahead, since it
+  // may be able to pass through empty gaps and eat further along. Uses
+  // the same computeFishRun logic movement itself relies on, so this
+  // never drifts out of sync with what tapping would actually do.
+  // A fish is "dead" (untappable) only if it genuinely cannot move at
+  // all right now — not based on whether it has any color-matching
+  // purpose left. A fish with zero remaining matching cells in its lane
+  // can still be worth tapping: even a purposeless pass-through move
+  // clears IT out of the way, which can unblock a different fish
+  // crossing its cell. So tappability is simply "can computeFishRun
+  // produce any movement" — the same check launchFish itself uses to
+  // decide whether to nudge (no-op) or actually slide, kept in sync by
+  // sharing the exact same logic rather than a separate color scan that
+  // could disagree with real movement capability (this was a real bug:
+  // a fish with no color left could still slide into an empty gap and
+  // free up a crossing fish, but the old color-scan-based dead check
+  // blocked it from ever being tapped in the first place).
+  function isFishDead(f){
+    if(f.state==='gone') return true;
+    const {stopX, stopY, exits} = computeFishRun(f);
+    return !exits && stopX===f.x && stopY===f.y;
+  }
+
+  // ============================================================
+  // FISH MOVEMENT — Sandwich Programming
+  //   Start Cue: launchFish() begins, computes the run this fish will eat
+  //              and where it ultimately stops (parked mid-lane, or exits)
+  //   Filling:   one continuous slide animation from current pos to stop
+  //              pos, with per-cell eat-pop timed to when the fish visually
+  //              passes each cell (cosmetic only — doesn't gate anything)
+  //   End Cue:   slide animation's transitionend -> commit board state
+  //              (clear eaten cells), commit fish's new position/state,
+  //              check win, re-render (fallback timer as backstop)
+  // ============================================================
+
+  // Find a PARKED fish (an on-board obstacle) sitting at (x,y), if any.
+  // Only 'parked' fish are obstacles — 'home' fish are off-grid and
+  // never block anything, 'gone' fish have exited and are off-board too.
+  function fishOccupying(x, y, excludeId){
+    for(const other of fish){
+      if(other.id===excludeId) continue;
+      if(other.state!=='parked') continue;
+      if(other.x===x && other.y===y) return other;
+    }
+    return null;
+  }
+
+  // Compute the run of cells a fish will eat and its final resting spot.
+  // Empty (already-cleared) cells are passed through freely. Parked fish
+  // are obstacles: a DIFFERENT-color parked fish stops this fish ONE
+  // CELL BEFORE it (two fish can never share a cell); a SAME-color
+  // parked fish is passed through freely, staying put, unaffected.
+  // Returns {run:[{x,y}...], stopX, stopY, exits:boolean, passedFish:[fish...]}
+  function computeFishRun(f){
+    const color = f.color; // always locked from spawn now, never derived
+    const run = [];
+    const passedFish = []; // same-color parked fish this run slides through
+    if(f.axis==='row'){
+      let cx = f.x+1;
+      let lastPassable = f.x; // furthest cell reached, eaten or passed through
+      while(cx<GRID){
+        const blocker = fishOccupying(cx, f.y, f.id);
+        if(blocker){
+          if(blocker.color===color){ passedFish.push(blocker); lastPassable = cx; cx++; continue; } // same color: pass through
+          break; // different color fish: stop one cell before it
+        }
+        const cell = board[f.y][cx];
+        if(cell===color){ run.push({x:cx, y:f.y}); lastPassable = cx; cx++; }
+        else if(cell===null){ lastPassable = cx; cx++; } // pass through freely
+        else { break; } // mismatched color — real stop
+      }
+      const exits = (cx>=GRID);
+      return {run, stopX: exits ? GRID : lastPassable, stopY: f.y, exits, color, passedFish};
+    } else {
+      let cy = f.y+1;
+      let lastPassable = f.y;
+      while(cy<GRID){
+        const blocker = fishOccupying(f.x, cy, f.id);
+        if(blocker){
+          if(blocker.color===color){ passedFish.push(blocker); lastPassable = cy; cy++; continue; }
+          break;
+        }
+        const cell = board[cy][f.x];
+        if(cell===color){ run.push({x:f.x, y:cy}); lastPassable = cy; cy++; }
+        else if(cell===null){ lastPassable = cy; cy++; }
+        else { break; }
+      }
+      const exits = (cy>=GRID);
+      return {run, stopX: f.x, stopY: exits ? GRID : lastPassable, exits, color, passedFish};
+    }
+  }
+
+  function launchFish(id){
+    const f = fish.find(ff=>ff.id===id);
+    if(!f || f.state==='gone') return;
+    if(animating.has(id)) return; // already mid-slide, ignore re-tap
+
+    // Fire AudioContext creation here (still inside the tap's user-gesture
+    // context, which browsers require) rather than lazily inside the
+    // per-cell setTimeout callback in slideFish. Creating an AudioContext
+    // for the first time is a real, measurable synchronous stall (~50ms in
+    // testing) — doing it here means it happens BEFORE the timing-critical
+    // disappear-delay chain starts, instead of blocking mid-chain and
+    // throwing off the first cell's actual disappear time relative to the
+    // fish's real on-screen position.
+    initAudio();
+
+    const {run, stopX, stopY, exits, color, passedFish} = computeFishRun(f);
+    const noMovement = (stopX===f.x && stopY===f.y && !exits);
+    if(noMovement){
+      nudgeFish(id);
+      return;
+    }
+
+    // ---- START CUE ----
+    // (color is already locked from spawn — nothing to set here anymore)
+    animating.add(id);
+
+    slideFish(f, run, stopX, stopY, exits, passedFish);
+  }
+
+  // Cartoon "bonk" squash-and-stretch, played when a fish stops because
+  // it hit an obstruction (mismatched color or blocking fish) rather
+  // than exiting the board. Animates the inner <svg> (not the outer
+  // .fish div, which owns left/top positioning — keeping this isolated
+  // avoids any interaction with that). transform-origin is pinned to
+  // the NOSE (the leading, direction-of-travel edge), so scaling always
+  // pulls the REAR toward/away from the nose rather than shifting the
+  // nose itself — the nose is what's touching the obstruction and
+  // shouldn't visually move.
+  // Sequence (per spec): rear squishes toward nose by 50% (length),
+  // rear widens by 60% (width), rear returns to normal width, then
+  // rear backs away unsquishing back to full length.
+  const BONK_DURATION_MS = 380;
+  // Requested note pool was A2/B2/C3/D3 (110/123.47/130.81/146.83Hz) —
+  // all within the same low range already confirmed inaudible on a
+  // real phone speaker (A2 specifically tested silent earlier this
+  // session, B2/C3/D3 are only 12-27% higher and almost certainly hit
+  // the same rolloff). Shifted the whole set up one octave instead
+  // (A3/B3/C4/D4) to land safely in the confirmed-audible range while
+  // keeping the exact same relative note pattern/character requested.
+  const BONK_NOTE_POOL_HZ = [220.00, 246.94, 261.63, 293.66]; // A3, B3, C4, D4
+
+  function playBonkTone(){
+    if(!audioCtx || soundMuted) return;
+    const now = audioCtx.currentTime;
+    const attack = 0.005;
+    const decay = 0.18;
+
+    const playPartial = (freq, peakGain) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(peakGain, now + attack);
+      gain.gain.linearRampToValueAtTime(0, now + attack + decay);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + attack + decay + 0.02);
+    };
+    // Random pick from the note pool each bonk. Every note still gets
+    // its own octave-up partial layered in (same reasoning as before —
+    // the higher partial is what keeps the fundamental's "thud"
+    // character audible on hardware that rolls off the low end).
+    const baseFreq = BONK_NOTE_POOL_HZ[Math.floor(Math.random()*BONK_NOTE_POOL_HZ.length)];
+
+    playPartial(baseFreq, 0.16);      // fundamental, quiet
+    playPartial(baseFreq*2, 0.10);    // octave-up, keeps it audible on phone speakers
+  }
+
+  function playBonkAnimation(fishEl){
+    const svg = fishEl.querySelector('svg');
+    if(!svg) return;
+    playBonkTone();
+    // Rotation now lives on a separate wrapper div (see fishSVG()), so
+    // this only ever needs to scale the SVG in its own clean unrotated
+    // local frame — no compounding rotate+scale around a shared
+    // transform-origin, which previously caused the nose to visibly
+    // drift position during the widen phase (confirmed via isolated
+    // testing: scaling non-uniformly and then rotating around the same
+    // pivot point does not keep that point pinned to the same edge of
+    // the resulting bounding box). transform-origin is already set to
+    // 100% 50% (the nose, right-middle edge) in fishSVG()'s inline style.
+    svg.animate([
+      { transform: 'scale(1, 1)',       offset: 0    },
+      { transform: 'scale(0.5, 1)',     offset: 0.25 }, // rear squishes toward nose by 50%
+      { transform: 'scale(0.5, 1.6)',   offset: 0.45 }, // rear widens by 60%
+      { transform: 'scale(0.5, 1)',     offset: 0.65 }, // rear returns to normal width
+      { transform: 'scale(1, 1)',       offset: 1    }  // rear backs up, unsquishing to full length
+    ], { duration: BONK_DURATION_MS, easing: 'ease-out' });
+  }
+
+  const SPIN_DURATION_MS = 550; // two full rotations, plenty of time to read clearly
+
+  // Cartoonish "seeing stars" dizzy whirl, played alongside the pass-by
+  // spin. Two things make it read as "dizzy" rather than a plain swoop:
+  // vibrato (an LFO wobbling the carrier's pitch in a fast circular
+  // pattern, like a spinning trombone) and tremolo (a slower LFO
+  // wobbling volume, adding a woozy "wah-wah-wah" flutter). The base
+  // tone itself slides downward overall — the "stumbling dizzy"
+  // contour — while the faster vibrato spins on top of that slide.
+  // ~0.8s total, slightly longer than SPIN_DURATION_MS (550ms) so it
+  // tails off a touch after the visual spin finishes — reads as a
+  // lingering "dizzy aftereffect" rather than cutting off abruptly.
+  function playDizzyWhirl(){
+    if(!audioCtx || soundMuted) return;
+    const now = audioCtx.currentTime;
+    const totalDur = 0.8;
+
+    const carrier = audioCtx.createOscillator();
+    carrier.type = 'triangle';
+    carrier.frequency.setValueAtTime(700, now);
+    carrier.frequency.exponentialRampToValueAtTime(260, now + totalDur);
+
+    const vibratoLFO = audioCtx.createOscillator();
+    vibratoLFO.type = 'sine';
+    vibratoLFO.frequency.setValueAtTime(10, now);
+    vibratoLFO.frequency.linearRampToValueAtTime(16, now + totalDur);
+    const vibratoDepth = audioCtx.createGain();
+    vibratoDepth.gain.setValueAtTime(90, now);
+    vibratoDepth.gain.linearRampToValueAtTime(35, now + totalDur);
+    vibratoLFO.connect(vibratoDepth);
+    vibratoDepth.connect(carrier.frequency);
+
+    const tremoloLFO = audioCtx.createOscillator();
+    tremoloLFO.type = 'sine';
+    tremoloLFO.frequency.setValueAtTime(7, now);
+    tremoloLFO.frequency.linearRampToValueAtTime(12, now + totalDur);
+    const tremoloDepth = audioCtx.createGain();
+    tremoloDepth.gain.value = 0.072; // 0.12 * 0.6 (40% quieter overall)
+    const tremoloBase = audioCtx.createGain();
+    tremoloBase.gain.value = 0.132; // 0.22 * 0.6
+    tremoloLFO.connect(tremoloDepth);
+    tremoloDepth.connect(tremoloBase.gain);
+
+    const envelope = audioCtx.createGain();
+    envelope.gain.setValueAtTime(0.0001, now);
+    envelope.gain.linearRampToValueAtTime(1.0, now + 0.02);
+    envelope.gain.setValueAtTime(1.0, now + totalDur * 0.7);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, now + totalDur);
+
+    carrier.connect(tremoloBase);
+    tremoloBase.connect(envelope);
+    envelope.connect(audioCtx.destination);
+
+    // quieter harmony layer an octave+fifth up — a touch of cartoon
+    // sparkle riding along with the whirl
+    const chime = audioCtx.createOscillator();
+    chime.type = 'sine';
+    chime.frequency.setValueAtTime(700 * 2.5, now);
+    chime.frequency.exponentialRampToValueAtTime(260 * 2.5, now + totalDur);
+    const chimeVibratoDepth = audioCtx.createGain();
+    chimeVibratoDepth.gain.setValueAtTime(140, now);
+    chimeVibratoDepth.gain.linearRampToValueAtTime(60, now + totalDur);
+    vibratoLFO.connect(chimeVibratoDepth);
+    chimeVibratoDepth.connect(chime.frequency);
+    const chimeGain = audioCtx.createGain();
+    chimeGain.gain.setValueAtTime(0.0001, now);
+    chimeGain.gain.linearRampToValueAtTime(0.048, now + 0.02); // 0.08 * 0.6 (40% quieter overall)
+    chimeGain.gain.setValueAtTime(0.048, now + totalDur * 0.7);
+    chimeGain.gain.exponentialRampToValueAtTime(0.0001, now + totalDur);
+    chime.connect(chimeGain);
+    chimeGain.connect(audioCtx.destination);
+
+    carrier.start(now);
+    chime.start(now);
+    vibratoLFO.start(now);
+    tremoloLFO.start(now);
+
+    const stopAt = now + totalDur + 0.05;
+    carrier.stop(stopAt);
+    chime.stop(stopAt);
+    vibratoLFO.stop(stopAt);
+    tremoloLFO.stop(stopAt);
+  }
+
+  // "Spin as it passes" — a same-color parked fish gets a full 360°
+  // spin, like an old road sign spinning as a car goes by, when a
+  // different fish of the same color slides through its cell. Applied
+  // to the WRAPPER div (which holds the base rotate(0/90deg) — see
+  // fishSVG()), not the SVG itself, so it doesn't fight the bonk's
+  // scale animation on the same fish if both were ever triggered close
+  // together (different elements, no shared transform to stomp on).
+  function playSpinAnimation(fishId){
+    const fishEl = document.querySelector(`.fish[data-id="${fishId}"]`);
+    if(!fishEl) return;
+    const wrapper = fishEl.querySelector('div');
+    if(!wrapper) return;
+    playDizzyWhirl();
+    const base = wrapper.style.transform.match(/rotate\([^)]*\)/)?.[0] || 'rotate(0deg)';
+    const baseDeg = parseFloat(base.match(/-?\d+/)?.[0] || '0');
+    spinning.add(fishId); // protects this fish's element from renderFish's rebuild for the duration
+    const anim = wrapper.animate([
+      { transform: `rotate(${baseDeg}deg)` },
+      { transform: `rotate(${baseDeg+720}deg)` } // two full spins
+    ], { duration: SPIN_DURATION_MS, easing: 'ease-in-out' });
+    anim.onfinish = ()=>{
+      spinning.delete(fishId);
+      render(); // catch up on any renders that were skipped while protected
+    };
+  }
+
+  function nudgeFish(id){
+    const el = document.querySelector(`.fish[data-id="${id}"]`);
+    if(!el) return;
+    const f = fish.find(ff=>ff.id===id);
+    const horizontal = !f || f.axis==='row';
+    const prop = horizontal ? 'translateX' : 'translateY';
+    el.animate([
+      {transform:`${prop}(0)`},
+      {transform:`${prop}(-4px)`},
+      {transform:`${prop}(4px)`},
+      {transform:`${prop}(0)`}
+    ], {duration:180, easing:'ease-out'});
+  }
+
+  function slideFish(f, run, stopX, stopY, exits, passedFish){
+    const el = document.querySelector(`.fish[data-id="${f.id}"]`);
+    if(!el){ animating.delete(f.id); return; }
+
+    // ---- FILLING: cells disappear instantly as the fish passes them ----
+    // True travel distance includes cells passed through empty (not just
+    // eaten ones) — a fish sliding across 2 gaps then eating 3 cells
+    // still visually travels 5 cells, not 3.
+    const effectiveStopX = exits ? GRID : stopX;
+    const effectiveStopY = exits ? GRID : stopY;
+    const totalDist = Math.max(1, Math.abs(effectiveStopX-f.x) + Math.abs(effectiveStopY-f.y));
+    const perCellMs = 70;
+    const duration = Math.max(140, totalDist*perCellMs);
+
+    // move the fish's logical position immediately (board data commits
+    // at slide end, but the fish's own x/y drives the slide target)
+    const targetPos = fishScreenPos({...f, x:stopX, y:stopY});
+
+    // Force a synchronous layout flush before starting the transition.
+    // For a MANUAL tap, el has existed on screen since the previous
+    // render — the browser already painted its resting position, so
+    // setting a new transition+left here has a real "before" state to
+    // animate from. But for an AUTO-LAUNCHED fish, render() just ran
+    // synchronously moments earlier in this exact same call stack,
+    // creating el fresh — the browser never got a chance to paint that
+    // starting position before this code immediately overwrites left
+    // again with the target. With nothing painted in between, the
+    // transition has no "before" to interpolate from and the browser
+    // just snaps straight to the end (a real observed bug: auto-
+    // launched fish were popping off the board instead of sliding).
+    // Reading a layout property (offsetHeight) forces the browser to
+    // commit/paint the CURRENT styles before any further style changes
+    // are processed, giving the transition a real starting point.
+    void el.offsetHeight;
+
+    el.style.transition = `left ${duration}ms linear, top ${duration}ms linear, opacity 200ms ease-in ${Math.max(0,duration-150)}ms`;
+    el.style.left = targetPos.left+'px';
+    el.style.top = targetPos.top+'px';
+    if(exits){
+      el.style.opacity = '0';
+    }
+
+    // Generate a random starting note for this run (stack)
+    const runStartOffset = Math.floor(Math.random() * (RANDOM_START_RANGE*2 + 1)) - RANDOM_START_RANGE;
+
+    // ---- Unified real-position-driven trigger list ----
+    // Both "eat this block" and "spin that same-color fish" reduce to
+    // the same rule: has the MOVING FISH'S OWN CENTER reached this
+    // target's center? One sorted list, one pointer, one poll loop —
+    // replaces what used to be two separate parallel tracking systems
+    // (cellCenters+eatCell, passedFishCenters+spin) that duplicated
+    // the same real-position-polling machinery twice.
+    // Everything is measured live via getBoundingClientRect() rather
+    // than predicted from a timer, for the same reason as before:
+    // device jitter (frame drops, GC pauses) means predicted delays
+    // drift out of sync with what actually gets painted, confirmed via
+    // Timing Debug in earlier testing.
+    const targets = [];
+    run.forEach(cell=>{
+      const cEl = gridEl.querySelector(`.cell[data-x="${cell.x}"][data-y="${cell.y}"]`);
+      if(!cEl) return;
+      const r = cEl.getBoundingClientRect();
+      targets.push({
+        type: 'block',
+        cell,
+        centerPx: f.axis==='row' ? (r.left+r.right)/2 : (r.top+r.bottom)/2
+      });
+    });
+    (passedFish||[]).forEach(pf=>{
+      const pfEl = document.querySelector(`.fish[data-id="${pf.id}"]`);
+      if(!pfEl) return;
+      const r = pfEl.getBoundingClientRect();
+      targets.push({
+        type: 'fish',
+        fish: pf,
+        centerPx: f.axis==='row' ? (r.left+r.right)/2 : (r.top+r.bottom)/2
+      });
+    });
+    // Sort by position along the direction of travel so targets fire
+    // in the correct order as the moving fish sweeps through — blocks
+    // and passed fish can be interleaved in either order depending on
+    // the board, so this can't just be two separate ordered lists.
+    targets.sort((a,b)=>a.centerPx-b.centerPx);
+
+    let nextIdx = 0; // shared forward pointer for the whole sorted list
+    let rafId = null;
+    let pitchCounter = 0; // Stack Tones pitch index only advances for BLOCK targets, not fish
+
+    function pollCenter(){
+      const rect = el.getBoundingClientRect();
+      const myCenterPx = f.axis==='row' ? (rect.left+rect.right)/2 : (rect.top+rect.bottom)/2;
+
+      while(nextIdx < targets.length && myCenterPx >= targets[nextIdx].centerPx){
+        triggerTarget(targets[nextIdx]);
+        nextIdx++;
+      }
+
+      if(nextIdx < targets.length){
+        rafId = requestAnimationFrame(pollCenter);
+      }
+    }
+
+    function triggerTarget(target){
+      if(target.type==='block'){
+        eatCell(target, pitchCounter);
+        pitchCounter++;
+      } else {
+        playSpinAnimation(target.fish.id);
+      }
+    }
+
+    function eatCell(entry, pitchIndexInGroup){
+      const {cell} = entry;
+      const key = cell.x+','+cell.y;
+      const isSinglePieceLand = run.length === 1;
+      const freq = landingFrequency(pitchIndexInGroup, isSinglePieceLand, runStartOffset);
+      playTone(freq, 0.12);
+      hiddenCells.add(key);
+      const cEl = gridEl.querySelector(`.cell[data-x="${cell.x}"][data-y="${cell.y}"]`);
+      if(cEl && cEl.isConnected){
+        cEl.style.opacity = '0';
+      }
+      spawnEatBurst(cell.x, cell.y, f.axis);
+      if(timingDebugOn){
+        const rect = el.getBoundingClientRect();
+        const myCenterPx = f.axis==='row' ? (rect.left+rect.right)/2 : (rect.top+rect.bottom)/2;
+        const gapPx = myCenterPx - entry.centerPx;
+        log(`TIMING x=${cell.x},y=${cell.y} (RAF-live): center=${myCenterPx.toFixed(1)}px target=${entry.centerPx.toFixed(1)}px gap=${gapPx.toFixed(1)}px`);
+      }
+    }
+
+    if(targets.length > 0){
+      rafId = requestAnimationFrame(pollCenter);
+    }
+
+    let ended = false;
+    const finish = ()=>{
+      if(ended) return;
+      ended = true;
+      el.removeEventListener('transitionend', finish);
+      clearTimeout(fallback);
+      if(rafId!==null) cancelAnimationFrame(rafId);
+      // Safety net: force-trigger any targets the RAF poll hadn't
+      // caught yet (e.g. a very short move where the transition
+      // finishes between frames). Ensures every block is always hidden
+      // and every passed fish always spun by the time the slide is
+      // considered complete, regardless of frame timing.
+      while(nextIdx < targets.length){
+        triggerTarget(targets[nextIdx]);
+        nextIdx++;
+      }
+      if(!exits){
+        f.pendingBonk = true; // consumed and cleared by renderFish() on the fresh element it creates
+      }
+      // ---- END CUE ----
+      onSlideEnd(f, run, stopX, stopY, exits);
+    };
+    el.addEventListener('transitionend', finish);
+    const fallback = setTimeout(finish, duration + 250); // safety net only
+  }
+
+  function onSlideEnd(f, run, stopX, stopY, exits){
+    // commit eaten cells
+    run.forEach(c=>{
+      board[c.y][c.x] = null;
+      hiddenCells.delete(c.x+','+c.y); // now genuinely committed, no longer needs the cosmetic-hide override
+    });
+    // commit fish position/state
+    f.x = stopX; f.y = stopY;
+    f.state = exits ? 'gone' : 'parked';
+    animating.delete(f.id);
+
+    render();
+
+    // checkWin FIRST: if the board just cleared, coastAwayFish() takes
+    // over sending every remaining fish flying off-screen in its own
+    // dedicated animation. checkAutoLaunch() must NOT also try to move
+    // a fish through the normal slide path in that case — a real bug
+    // was two different "fish leaves the board" systems (auto-launch's
+    // normal slide vs coastAwayFish's curved fly-away) racing on the
+    // same fish, causing it to visually pop instead of slide, and the
+    // victory screen to fire twice (once for each system's idea of
+    // "the board is clear now"). checkAutoLaunch is skipped once the
+    // board's empty, since there's nothing left for it to usefully do.
+    const boardAlreadyClear = !board.some(row => row.some(c => c!==null));
+    checkWin();
+    if(!boardAlreadyClear){
+      checkAutoLaunch();
+    }
+  }
+
+  // ============================================================
+  // AUTO-LAUNCH — a fish with a fully clear path to the exit edge
+  // (nothing left to eat, nothing blocking) goes automatically, no tap
+  // needed. Checked after every move commits, since clearing cells or
+  // moving a blocking fish out of the way can newly unblock a
+  // completely different fish's lane. Cascades naturally: each
+  // auto-launch's own onSlideEnd re-runs this check, so clearing one
+  // fish's path can chain into clearing the next.
+  // ============================================================
+  function checkAutoLaunch(){
+    for(const f of fish){
+      if(f.state==='gone' || animating.has(f.id)) continue;
+      const {run, stopX, stopY, exits} = computeFishRun(f);
+      const noMovement = (stopX===f.x && stopY===f.y && !exits);
+      if(noMovement) continue; // truly stuck, nothing to auto-launch
+      if(exits && run.length===0){
+        // Nothing left to eat AND the path to the edge is fully clear
+        // — this is the "obviously just go" case. A fish that still
+        // has cells to eat, or that stops short (blocked), stays
+        // manual; only a genuinely unobstructed clear-out auto-fires.
+        launchFish(f.id);
+        return; // one at a time — this fish's own onSlideEnd will
+                // re-trigger checkAutoLaunch() for the next candidate,
+                // so cascades happen in clean sequential steps rather
+                // than launching several fish simultaneously.
+      }
+    }
+  }
+
+  // ============================================================
+  // VICTORY: spiral-away + fireworks (Sandwich Programming)
+  //   Start Cue: checkWin() detects board is empty
+  //   Filling: remaining fish spiral off-screen over 0.5s
+  //   End Cue: spiral animations finish -> show overlay + fireworks
+  // ============================================================
+  // EAT BURST — a small 4-dot cone that pushes outward in the eating
+  // fish's direction of travel when a block is eaten. The 4 dots are
+  // grouped in one wrapper (not individually animated) so they read as
+  // a single unit scaling/moving together, not a scatter of particles.
+  function spawnEatBurst(cellX, cellY, axis){
+    const trackPx = cellSize*FISH_TRACK_RATIO;
+    const centerX = trackPx + gridPad + cellX*cellSize + cellSize/2;
+    const centerY = trackPx + gridPad + cellY*cellSize + cellSize/2;
+    const travelDeg = axis==='row' ? 0 : 90; // right for row fish, down for col fish
+
+    const size = 24;
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = centerX+'px';
+    wrapper.style.top = centerY+'px';
+    wrapper.style.width = size+'px';
+    wrapper.style.height = size+'px';
+    wrapper.style.pointerEvents = 'none';
+    wrapper.style.zIndex = '15'; // above cells/board, below fireworks/HUD
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+    // 4 dots arranged along a 180° arc (before rotation to the actual
+    // travel direction): flat edge of the semicircle faces the center
+    // (backward), curve bulges outward toward +x (forward) — like the
+    // front half of a ring opening in the direction of travel.
+    const dotPositions = [
+      {x:12.0, y:5.0},
+      {x:18.1, y:8.5},
+      {x:18.1, y:15.5},
+      {x:12.0, y:19.0}
+    ];
+    dotPositions.forEach(p=>{
+      const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      circle.setAttribute('cx', p.x);
+      circle.setAttribute('cy', p.y);
+      circle.setAttribute('r', 1.8);
+      circle.setAttribute('fill', '#fff');
+      circle.setAttribute('opacity', '0.9');
+      svg.appendChild(circle);
+    });
+    wrapper.appendChild(svg);
+    document.getElementById('board-outer').appendChild(wrapper);
+
+    // Single combined transform per keyframe: base rotation to the
+    // travel direction, then translate forward + scale outward together
+    // so the 4 dots move as one merged unit, not as separate particles.
+    const t = (dist,scale)=> `translate(-50%,-50%) rotate(${travelDeg}deg) translateX(${dist}px) scale(${scale})`;
+    const anim = wrapper.animate([
+      { transform:t(0,0.6),   opacity:1, offset:0 },
+      { transform:t(10,1.3),  opacity:0.8, offset:0.5 },
+      { transform:t(20,1.8),  opacity:0, offset:1 }
+    ], { duration:220, easing:'ease-out' });
+    anim.onfinish = ()=> wrapper.remove();
+  }
+
+  // ============================================================
+  function spawnFirework(container, x, y, color){
+    const size = 90, dots = 12;
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = x+'px';
+    wrapper.style.top = y+'px';
+    wrapper.style.width = size+'px';
+    wrapper.style.height = size+'px';
+    wrapper.style.pointerEvents = 'none';
+    wrapper.style.zIndex = '110';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+    const cx = size/2, cy = size/2, r = size/2-6;
+    for(let i=0;i<dots;i++){
+      const angle = (i/dots)*Math.PI*2;
+      const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      circle.setAttribute('cx', cx + r*Math.cos(angle));
+      circle.setAttribute('cy', cy + r*Math.sin(angle));
+      circle.setAttribute('r', 3);
+      circle.setAttribute('fill', color);
+      svg.appendChild(circle);
+    }
+    wrapper.appendChild(svg);
+    container.appendChild(wrapper);
+
+    const t = (y2,s)=> `translate(-50%,-50%) translateY(${y2}px) scale(${s})`;
+    const anim = wrapper.animate([
+      { transform:t(10,0.1),  opacity:1, offset:0 },
+      { transform:t(-45,0.7), opacity:1, offset:0.5 },
+      { transform:t(-65,1),   opacity:1, offset:0.75 },
+      { transform:t(-40,1),   opacity:0, offset:1 }
+    ], { duration: 1400, easing:'ease-out' });
+    anim.onfinish = ()=> wrapper.remove();
+  }
+
+  let fireworksInterval = null;
+
+  function shootFirework(){
+    const boardWrap = document.getElementById('board-wrap');
+    const rect = boardWrap.getBoundingClientRect();
+    const colors = Object.values(COLORS);
+    const x = 30 + Math.random()*(rect.width-60);
+    const y = rect.height*0.3 + Math.random()*(rect.height*0.35);
+    const color = colors[Math.floor(Math.random()*colors.length)];
+    spawnFirework(boardWrap, x, y, color);
+  }
+
+  function launchFireworks(){
+    for(let i=0;i<6;i++){ setTimeout(shootFirework, i*180); }
+    clearInterval(fireworksInterval);
+    fireworksInterval = setInterval(shootFirework, 1000);
+  }
+
+  function stopFireworks(){
+    clearInterval(fireworksInterval);
+    fireworksInterval = null;
+  }
+
+  // ---- FILLING: fish coast off-screen along a simple quarter-circle
+  // (90°) curve, oriented along their direction of travel throughout ----
+  // Each fish's SVG nose is already baked to face its natural movement
+  // direction by fishSVG()'s own inner rotate (0° for row/right fish,
+  // 90° for col/down fish) — that's a separate, INNER rotation on the
+  // <svg> itself. The outer .fish wrapper (which is what we animate
+  // here) therefore starts at rest with the nose already correctly
+  // oriented, so its own rotation must start at 0 and represent only
+  // the ADDITIONAL turn applied so far (turnDeg*t) — not the fish's
+  // absolute heading. Stacking an absolute heading on top of the
+  // already-oriented sprite would double-rotate it.
+  function coastAwayFish(){
+    const remaining = fish.filter(f=>f.state!=='gone');
+
+    const WAIT_BEFORE_WIN_MS = 600; // fixed wait regardless of flight duration
+    setTimeout(onWin, WAIT_BEFORE_WIN_MS);
+
+    if(remaining.length===0) return;
+
+    const FLIGHT_DURATION_MS = 900;
+    const FLIGHT_RADIUS = 260; // px, size of the quarter-circle turn
+
+    remaining.forEach((f)=>{
+      const el = document.querySelector(`.fish[data-id="${f.id}"]`);
+      if(!el) return;
+
+      const startHeadingDeg = f.axis==='row' ? 0 : 90; // right or down
+      const turnDeg = (Math.random()<0.5?-1:1) * 90;   // left or right turn
+      const R = FLIGHT_RADIUS * (0.8 + Math.random()*0.4);
+      const steps = 12;
+
+      // Quarter-circle arc: center of the turn circle sits 90° to the
+      // turn side of the starting heading. Standard parametric circle,
+      // parameterized by angle swept (0 -> turnDeg) instead of time
+      // directly, then eased below.
+      const headingRad = startHeadingDeg*Math.PI/180;
+      const turnSign = turnDeg>0 ? 1 : -1;
+      // center is R away, perpendicular to heading, on the turn side
+      const centerAngle = headingRad + turnSign*(Math.PI/2);
+      const cx = Math.cos(centerAngle)*R;
+      const cy = Math.sin(centerAngle)*R;
+      // starting point is angle (centerAngle + PI) from center, at radius R
+      const startAngleFromCenter = centerAngle + Math.PI;
+
+      const keyframes = [];
+      for(let s=0; s<=steps; s++){
+        const t = s/steps;
+        const easeT = t*t; // ease-in, starts slow, exits fast
+        const sweepRad = turnSign*(Math.PI/2)*easeT;
+        const angFromCenter = startAngleFromCenter + sweepRad;
+        const x = cx + Math.cos(angFromCenter)*R;
+        const y = cy + Math.sin(angFromCenter)*R;
+
+        // Outer wrapper rotation = turn applied SO FAR (relative),
+        // starting at 0. The sprite's nose is already pointed the
+        // right way at rest via fishSVG()'s inner rotate — this outer
+        // rotation only needs to track the additional curve.
+        const travelDeg = turnDeg*easeT;
+        const opacity = t < 0.6 ? 1 : Math.max(0, 1 - (t-0.6)/0.4);
+
+        // CSS transform order: translate (screen-space move) BEFORE
+        // rotate (pose) — see Sandwich Programming / project
+        // conventions, prevents rotation from bending the travel axis.
+        keyframes.push({
+          transform:`translate(${x}px, ${y}px) rotate(${travelDeg}deg)`,
+          opacity,
+          offset: t
+        });
+      }
+
+      el.animate(keyframes, { duration:FLIGHT_DURATION_MS, easing:'linear', fill:'forwards' });
+    });
+  }
+
+  function onWin(){
+    document.getElementById('overlay-win').classList.add('show');
+    launchFireworks();
+    playVictoryJingle();
+  }
+
+  function checkWin(){
+    if(hasWon) return; // already handled — see hasWon declaration for why this guard exists
+    const anyFilled = board.some(row => row.some(c => c!==null));
+    if(!anyFilled){
+      hasWon = true;
+      coastAwayFish();
+    }
+  }
+
+  // ============================================================
+  // DEBUG PANEL
+  // ============================================================
+  document.getElementById('btn-debug-toggle').addEventListener('click', ()=>{
+    document.getElementById('debug-panel').classList.toggle('show');
+  });
+
+  function updateMuteButtonText(){
+    const btn = document.getElementById('btn-mute');
+    btn.textContent = soundMuted ? '🔇' : '🔊';
+  }
+  updateMuteButtonText();
+
+  document.getElementById('btn-mute').addEventListener('click', ()=>{
+    soundMuted = !soundMuted;
+    localStorage.setItem('row-chomper-mute', soundMuted);
+    updateMuteButtonText();
+  });
+
+  // Info button: opens the How to Play overlay per Standard Game
+  // Layout's spec (reserved position, now wired to actual content).
+  document.getElementById('btn-info').addEventListener('click', ()=>{
+    document.getElementById('overlay-info').classList.add('show');
+  });
+  document.getElementById('btn-info-close').addEventListener('click', ()=>{
+    document.getElementById('overlay-info').classList.remove('show');
+  });
+
+  document.getElementById('btn-timing-debug').addEventListener('click', (e)=>{
+    timingDebugOn = !timingDebugOn;
+    e.target.textContent = `Timing Debug: ${timingDebugOn ? 'On' : 'Off'}`;
+    if(timingDebugOn){
+      log('TIMING debug on — tap a fish, then check Logs for tip-vs-center gap per cell');
+    }
+  });
+
+  document.getElementById('btn-preview-rescale').addEventListener('click', (e)=>{
+    const on = document.body.classList.toggle('preview-shrink');
+    e.target.textContent = `Preview Rescale: ${on ? 'On' : 'Off'}`;
+    layout(); render();
+  });
+
+  document.getElementById('btn-debug-restart').addEventListener('click', ()=>{
+    document.getElementById('overlay-win').classList.remove('show');
+    stopFireworks();
+    newBoard();
+  });
+
+  document.getElementById('btn-debug-solve').addEventListener('click', ()=>{
+    // greedy: find first fish that can currently move (eating cells
+    // and/or passing through empty gaps) and launch it
+    for(const f of fish){
+      if(f.state==='gone' || animating.has(f.id)) continue;
+      const {stopX, stopY, exits} = computeFishRun(f);
+      const canMove = exits || stopX!==f.x || stopY!==f.y;
+      if(canMove){ launchFish(f.id); return; }
+    }
+    log('Auto-solve: no fish can move (board clear or fully stuck)');
+  });
+
+  document.getElementById('btn-debug-reveal').addEventListener('click', ()=>{
+    debugRevealOn = !debugRevealOn;
+    render();
+  });
+
+  function buildStateDump(){
+    const lines = [];
+    lines.push('=== ROW CHOMPER STATE DUMP ===');
+    lines.push(new Date().toString());
+    lines.push('Animating fish ids: ' + (animating.size ? Array.from(animating).join(', ') : '(none)'));
+    lines.push('');
+
+    lines.push('--- BOARD (row,col from top-left; . = empty; full color names) ---');
+    board.forEach((row,y)=>{
+      lines.push(y+': ' + row.map(c=>c===null?'.':c.padEnd(6)).join(' '));
+    });
+    lines.push('');
+
+    lines.push('--- FISH (live movability check, computed right now) ---');
+    fish.forEach(f=>{
+      let moveDesc;
+      if(f.state==='gone'){
+        moveDesc = 'GONE (already exited)';
+      } else {
+        const {run, stopX, stopY, exits} = computeFishRun(f);
+        const moved = stopX!==f.x || stopY!==f.y;
+        if(!moved){
+          // identify exactly what's blocking it: a fish, or a color
+          const nx = f.axis==='row' ? f.x+1 : f.x;
+          const ny = f.axis==='row' ? f.y   : f.y+1;
+          let blockDesc = 'unknown';
+          if(nx<GRID && ny<GRID){
+            const blocker = fishOccupying(nx, ny, f.id);
+            if(blocker) blockDesc = `blocked by fish ${blocker.id} (${blocker.color}) at (${nx},${ny})`;
+            else blockDesc = `blocked by color ${board[ny][nx]} at (${nx},${ny})`;
+          } else {
+            blockDesc = 'at board edge with nowhere to go';
+          }
+          moveDesc = `DEAD (${blockDesc})`;
+        } else {
+          moveDesc = `CAN MOVE -> stop(${stopX},${stopY}) eats ${run.length} cell(s)${exits?' EXITS':''}`;
+        }
+      }
+      lines.push(`${f.id.padEnd(6)} axis=${f.axis} lane=${f.lane} color=${f.color.padEnd(6)} pos=(${f.x},${f.y}) state=${f.state.padEnd(6)} ${moveDesc}`);
+    });
+    lines.push('');
+
+    lines.push('--- CONSTRUCTED SOLUTION ORDER ---');
+    lines.push(debugSolutionOrder.join(', ') || '(none)');
+    lines.push('');
+
+    lines.push('--- DEBUG LOG ---');
+    lines.push(debugLogEl.textContent || '(empty)');
+
+    return lines.join('\n');
+  }
+
+  document.getElementById('btn-logs').addEventListener('click', ()=>{
+    document.getElementById('logs-textarea').value = buildStateDump();
+    document.getElementById('logs-modal').classList.add('show');
+    setTimeout(()=>{ document.getElementById('logs-textarea').select(); }, 50);
+  });
+  document.getElementById('btn-logs-close').addEventListener('click', ()=>{
+    document.getElementById('logs-modal').classList.remove('show');
+  });
+  // tapping the backdrop also closes it
+  document.getElementById('logs-modal').addEventListener('click', (e)=>{
+    if(e.target.id==='logs-modal') document.getElementById('logs-modal').classList.remove('show');
+  });
+  // re-select all on tap, for a fast re-copy
+  document.getElementById('logs-textarea').addEventListener('click', function(){
+    this.select();
+  });
+
+  document.getElementById('btn-next').addEventListener('click', ()=>{
+    document.getElementById('overlay-win').classList.remove('show');
+    stopFireworks();
+    levelCount++;
+    updateLevelCount();
+    newBoard();
+  });
+  document.getElementById('btn-reset').addEventListener('click', ()=>{
+    stopFireworks();
+    levelCount = 0;
+    updateLevelCount();
+    newBoard();
+  });
+
+  // ============================================================
+  // INIT
+  // ============================================================
+  window.addEventListener('resize', ()=>{ layout(); render(); });
+  newBoard();
+
+})();
+</script>
+</body>
+</html>
