@@ -1,0 +1,2177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Sort Stack</title>
+<style>
+/*
+  SORT STACK — version log
+  v0.1  Initial build. Fixed-height columns, solid-color blocks,
+        tap-source/tap-destination move rule, single board size.
+        Win = every non-empty column is single-type.
+  v0.2  Fixed flyer X-position bug (was measuring from column's padded
+        edge instead of a real block's edge, causing crooked landings).
+        Added GPU compositing hints (will-change/backface-visibility)
+        to flying blocks to reduce stutter during multi-block moves.
+  v0.3  Wired up Logs button: copies a debug report (board state, move
+        count, recent event log) to clipboard, with a visible-textarea
+        fallback if clipboard access fails. Instrumented flight animation
+        with per-block/per-phase timestamps (launch, phase3-fall start,
+        landing) to help pinpoint the phase-3 flicker report.
+  v0.4  Fixed the phase-3 "blink" bug: flyers were removed from the DOM
+        the instant their own animation finished, but the real board
+        doesn't re-render until the WHOLE run completes — so a landed
+        block would vanish (flyer gone) and not reappear (real block
+        not rendered yet) for however long the rest of the run took.
+        Landed flyers now stay visibly parked at their final position
+        until the run-ending render() swaps them for real blocks in
+        the same paint, closing the gap. Confirmed no legacy
+        settle/teleport animation code remained to interfere.
+  v0.5  Fixed multi-block run landing order: top-of-source block leaves
+        first (physically correct — it's on top of the pile) AND now
+        lands first, in the lowest available new slot. Each following
+        block stacks on top of the ones already placed, so the
+        destination pile visibly builds bottom-up as blocks arrive,
+        instead of the earlier version where the first-to-land block
+        appeared to float at the top with nothing under it yet.
+  v0.6  Fixed landing overshoot/snap: the flight animation had no
+        fill:'forwards', so WAAPI reverted the flyer to its pre-animation
+        transform the instant onfinish fired, then the manual position-pin
+        corrected it a frame later — reading as an overshoot-then-snap.
+        Added fill:'forwards' so the animation holds its final frame
+        cleanly. Also removed the dashed empty-slot outline styling
+        (kept the invisible spacer elements so column height still
+        reserves full capacity — just no visible dashed border anymore).
+  v0.7  Fixed remaining overshoot on longer runs: parked flyers were
+        sitting in their landed position for the rest of the run's
+        duration before being swapped for a real block, and the flyer's
+        hardcoded pixel dimensions vs. the real block's %-based sizing
+        could mismatch slightly at swap time, reading as a settle.
+        Split #board-wrap into an outer panel + inner #columns-container
+        so render() can rebuild just the columns without touching
+        in-flight flyers (which stay direct children of #board-wrap).
+        Each block now swaps from flyer to real block THE INSTANT it
+        lands, independently — no more waiting for the whole run.
+  v0.8  Fixed the "left-behind box blinks back" bug: source blocks were
+        hidden via inline opacity:0, but v0.7's per-block render() wiped
+        and regenerated the source column from columns[] data before
+        that block's own data had been removed — the fresh DOM element
+        had no memory of the opacity hide, so it flashed back visible.
+        Fix: pop each block's data from the source column at LAUNCH
+        time (not landing), so any render() mid-run always reflects
+        the correct, already-shrunk source column — no opacity hack
+        needed at all. Also fixed a resulting double-pop bug where the
+        landing callback was still trying to remove a second block from
+        source; it now only pushes to the destination. Also fixed a
+        related stale-reference bug: each block's start-position measurement
+        now re-queries the live source column DOM at launch time instead of
+        using a DOM reference captured before the run began, since earlier
+        blocks' launch-time renders could have already replaced that element.
+  v0.9  DIAGNOSTIC ONLY — could not reproduce "taps do nothing" in automated
+        testing (syntax checked clean, render() verified working, synthetic
+        click events correctly changed selection state, no z-index/pointer-
+        events blockers found). Added a global window.onerror /
+        unhandledrejection listener that logs any real JS exception into
+        the same buffer the Logs button reads, so if this happens again,
+        Logs will surface the actual error instead of silence. No other
+        behavior changed in this version.
+  v0.10 Reduced board to 6 columns / 4 colors (was 7/5), per request to
+        make the board more "comfy". Pure config change — COLUMN_COUNT
+        and COLOR_COUNT already drove everything (column layout is
+        flex-based, COLORS array slices to whatever COLOR_COUNT is), so
+        nothing else needed touching. Headroom ratio (empty slots vs
+        total capacity) actually improved slightly: 32 empty / 96 total
+        (33%) vs the old 32 empty / 112 total (29%).
+  v0.11 Visual tweaks: sharper box corners (border-radius 6px→2px) and
+        tighter stacking gap (4px→2px). Updated the flight animation's
+        gap math to match, so landing coordinates stay accurate.
+  v0.12 Added squash-and-stretch "filling" to the flight animation
+        (rise/arch/fall stretch + a chained land-squash before swap).
+        This is layered on top of the existing translate-path animation
+        purely as scale() transforms — no game logic touches it. The
+        FLIGHT start/FLIGHT complete log cues ("the bread") still mark
+        the true beginning and true end: FLIGHT complete now correctly
+        waits for the land-squash to finish too, not just the fall, so
+        the data swap still can't happen until the whole visual sequence
+        (translate + squash) is done. transform-origin set to bottom
+        center on flyers so the squash reads as a ground-anchored impact
+        instead of the block scaling from its center.
+  v0.13 Made the stretch more dramatic: X narrower by an extra 25%
+        (0.6→0.45) and Y taller by an extra 30% (1.4→1.82).
+  v0.14 Sped up flight by 0.2s (550ms→350ms). Phase3 log cue auto-adjusts
+        since it's derived from FLIGHT_MS as a multiplier.
+  v0.15 Changed flight easing from ease-in-out to ease-out, so the
+        stretch snaps in faster at the start instead of easing in.
+  v0.16 Blocks now start already stretched at entrance (scale 0.45,1.82
+        from frame 0) instead of easing into the stretch mid-rise —
+        reads like the block launches already coiled and ready.
+  v0.17 Sped up flight by another 0.2s (350ms→150ms), then slowed back
+        down by 0.15s per follow-up feedback (150ms→300ms) — net change
+        from v0.14's baseline is -0.05s (350ms→300ms).
+  v0.18 Added click-and-drag input as an alternative to tap-tap: press
+        a column (pointerdown) to select it as source, drag, release
+        (pointerup) over a different column to attempt the move. Pure
+        input-layer addition — reuses onColumnTap's existing selection
+        and move-legality logic entirely, no new visual behavior, no
+        changes to move rules. Guards against double-firing when
+        press+release land on the same column (a plain tap still works
+        exactly as before). document.elementFromPoint() on release finds
+        whichever column is actually under the pointer at release time,
+        which may differ from the column that was originally pressed.
+  v0.19 Fixed drag not registering at all (press did nothing): v0.18
+        removed the working click listener entirely and relied only on
+        pointerdown/pointerup, which apparently didn't fire reliably in
+        the real environment despite working in simulated testing —
+        restored click as the primary/proven tap-tap path. Drag is now
+        a fully independent second path: pointerdown sets a separate
+        dragSourceIndex (never touches `selected`, so it can't conflict
+        with click-based selection), pointerup checks dragSourceIndex
+        specifically and only acts if release lands on a DIFFERENT
+        column than where the press started — same-column press+release
+        is left alone for click to handle as a normal tap. Also added
+        temporary DIAG log lines on click/pointerdown/pointerup so the
+        Logs button can show which events are actually firing on the
+        real device if drag still doesn't behave as expected.
+  v0.20 Found the real cause via the Logs report you sent: pointerdown
+        was firing every time, but pointerup often never arrived — the
+        browser was likely treating the sustained press-and-move as a
+        pan/scroll attempt and swallowing the pointerup before it
+        reached our code (touch-action:manipulation on body still
+        permits panning gestures). Set touch-action:none specifically
+        on .column so the browser stops intercepting sustained
+        touch-drags there. Also added a pointercancel handler to clear
+        dragSourceIndex if the browser does interrupt a gesture, so a
+        stale drag-source can't misfire on a later unrelated release.
+  v0.21 Added highlight during press-and-hold, matching tap-selection's
+        visual: pointerdown now sets `selected` immediately (same
+        mechanism click already used), so the column shows selected the
+        instant you press, through the whole drag, until release
+        resolves it. Fixed two related edge cases surfaced while
+        building this: (1) releasing outside any column now explicitly
+        clears the highlight instead of leaving it stuck; (2) releasing
+        back on the SAME column no longer touches `selected` directly —
+        click's existing toggle logic is left as the single source of
+        truth for that case, since having both pointerup and click each
+        try to resolve it caused a fast tap to end up incorrectly
+        selected instead of toggling off. Also added a brief
+        suppressNextClick guard after a successful cross-column drag, in
+        case a browser fires a stray synthetic click on the destination
+        afterward — prevents that from re-selecting the destination.
+  v0.22 Fixed a regression from v0.21 that broke ALL tap selections
+        (confirmed via your Logs report — every fast tap showed
+        pointerdown/pointerup/click firing correctly, but selection
+        never visibly stuck). Root cause: v0.21's pointerdown handler
+        set `selected` directly for the press-highlight. On a fast tap,
+        by the time click's own toggle-check ran, `selected` was ALREADY
+        set to that same column (from its own pointerdown moments
+        earlier) — so click's "if already selected, deselect" branch
+        fired immediately, undoing the selection within the same
+        gesture. Fix: introduced a separate `pressHighlight` state that
+        is PURELY VISUAL and never touches `selected`. render() now
+        highlights a column if EITHER selected OR pressHighlight matches
+        it, but only `selected` feeds move logic and click's toggle
+        check. pressHighlight is cleared on every release path
+        (same-column tap, cross-column drag, released-outside,
+        pointercancel) since its job — showing feedback during an
+        active hold — always ends when the gesture ends, regardless of
+        what `selected` becomes afterward.
+  v0.29 Fixed "two columns highlighted at once" bug: render() lit up a
+        column if EITHER `selected` OR `pressHighlight` matched it, with
+        no regard for whether they were from the SAME gesture. Tap col A
+        (selected=A), then press-drag col B (pressHighlight=B) — both
+        conditions are simultaneously true, so A and B both show
+        selected mid-drag, even though only `selected` was ever actually
+        driving move logic underneath. Root cause was purely visual, not
+        a state/logic bug — attemptSelectOrMove was already resolving
+        the move correctly. Fix: while a gesture is in progress
+        (pendingGestureSource !== null), render only pressHighlight's
+        column; a stale `selected` from an earlier, separate gesture no
+        longer lights up until the current gesture resolves.
+  v0.30 Fixed fast-flick drags registering nothing: onGestureEnd used
+        document.elementFromPoint(e.clientX, e.clientY) at the EXACT
+        pointerup coordinates to find the release target. On a fast
+        flick the finger is already lifting past the board/column edge
+        by the time pointerup fires, so those coordinates land outside
+        any .column element — elementFromPoint returns null, and the
+        gesture was silently dropped ("released outside any column").
+        Slow presses didn't hit this because the finger was still
+        precisely over the target at release. Fix: added a document-level
+        pointermove listener that continuously records lastHoverCol —
+        the last column actually confirmed under the pointer during the
+        current gesture. onGestureEnd now falls back to lastHoverCol
+        whenever the literal release point misses every column, so a
+        flick that visibly crossed a column still resolves correctly.
+  v0.31 Fixed drags silently failing to register at all (repeated presses
+        on the same column doing nothing, per your Logs report — 4 of 5
+        presses on col0 produced no move). Root cause: pointerup/
+        pointercancel were bound directly on each .column element, but
+        pointerdown's own render() call (for pressHighlight) rebuilds
+        EVERY .column element mid-gesture — the element the pointerdown
+        fired on gets destroyed and replaced with a fresh one that never
+        received that pointerdown. The browser doesn't reliably hand the
+        in-progress pointer off to the new element, so pointerup had
+        nowhere to land — gesture just died with no error, no cancel, no
+        log. Fix: pointerup/pointercancel are now bound ONCE at the
+        document level instead of per-column, so it's irrelevant how many
+        times columns get rebuilt mid-press. Also added logging at the
+        top of onGestureEnd (which path: pointerup vs pointercancel, and
+        which of the three possible outcomes — aborted/ignored/resolved)
+        since the previous version had no visibility into pointerup at
+        all, only pointerdown — that blind spot is why this took a second
+        report to pin down.
+  v0.32 Fixed the ACTUAL root cause behind v0.31's symptom (v0.31's
+        document-level pointerup fix was correct but incomplete — your
+        follow-up Logs report showed 21 pointerdowns and only 2 pointerups
+        for what should've been a couple of taps, with a run of presses
+        firing every 200-500ms with no corresponding releases). Cause:
+        pointerdown's handler called full render() to show pressHighlight,
+        which does columnsContainer.innerHTML = '' and rebuilds every
+        column as a brand-new element — including the exact element the
+        finger is still physically down on. On some mobile browsers, a
+        sustained touch landing on a freshly-swapped DOM node at the same
+        screen position gets treated as a NEW pointerdown on that node,
+        even though the finger never lifted. That re-fire called render()
+        again, creating another new node, which could re-fire again —
+        a self-sustaining loop that ate the real gesture and starved
+        pointerup entirely. Two-part fix: (1) pointerdown now ignores
+        itself if a gesture is already pending (pendingGestureSource !==
+        null), so even if the browser does re-fire, it's a no-op; (2)
+        added updateHighlightsOnly(), which toggles the 'selected'
+        className on the EXISTING column elements instead of rebuilding
+        the DOM tree — pointerdown now calls this instead of render(), so
+        the elements involved in an active gesture are never replaced out
+        from under the pointer in the first place. render() is still used
+        for anything that actually changes board state (moves, restarts).
+  v0.37 REVERT: rolled back to this last confirmed-working, sound-free
+        build. v0.33-v0.36 added Tone.js landing sounds and made several
+        attempts to fix a resulting "whole board unresponsive" freeze
+        (guarding synth construction with try/catch, adding `defer` to
+        the script tag, deferring sound init until after the board was
+        already interactive). None of those fixes resolved it — the
+        freeze persisted even after sound init could no longer throw
+        synchronously or block page parsing, which means the true cause
+        was never actually confirmed; we were reasoning from symptoms
+        without a console error or debug log to check against, since the
+        freeze prevented getting either. Rather than keep guessing on
+        an already twice-failed theory, reverting entirely to the last
+        version with zero Tone.js code, so the game is confirmed back to
+        a known-good state. Sound will be re-attempted fresh, from
+        scratch, once this baseline is confirmed working again — likely
+        with actual browser console access this time to see the real
+        error immediately, instead of inferring it from the outside.
+  v0.38 Confirmed: v0.37's freeze was the in-chat PREVIEW sandbox, not
+        the game itself — downloaded/real-device builds worked the whole
+        time. So the sound re-attempt below isn't fixing a real bug, but
+        is still built dependency-free on purpose as a precaution.
+
+        Added landing sounds, built fresh with raw Web Audio API —
+        deliberately no Tone.js, no CDN, no external <script> tag at
+        all, removing that entire risk class regardless of whether it
+        was ever the real cause. Each block plays a short sine "plink"
+        exactly when its land-squash animation finishes (squash.onfinish,
+        not the raw flight landing) — matches "on impact" as requested.
+
+        Pitch: within one move, every block pitches up 6 semitones
+        (tritone, half of a 12-semitone octave) from the base 220Hz (A3),
+        using the FIRST block to land as pitch index 0. Pitch index comes
+        from `leadOrder` — each block's fixed, pre-computed position in
+        the landing sequence — rather than a shared incrementing counter,
+        so pitch stays correct even if landing callbacks fire slightly
+        out of their "expected" order under frame drops. No explicit
+        "reset" step needed: leadOrder is recalculated fresh at the start
+        of every flyBlocksToColumn() call, so each new move's first
+        landing is always pitch index 0 automatically.
+
+        Sounds stack like one-shots, not a single shared voice: every
+        playLandingSound() call creates its own independent
+        oscillator+gain node pair, plays once, and is discarded. Nothing
+        is shared or reused between calls, so up to N overlapping sounds
+        (N = blocks in the stack, no hard cap) all ring out independently
+        with zero risk of one call cutting another off — the exact "cut
+        off" bug from the original Tone.js PolySynth attempt (shared
+        voice pool with limited polyphony) can't happen here by
+        construction, since there is no shared pool at all.
+
+        AudioContext is created lazily on first real user input (inside
+        the existing pointerdown handler, which already runs after
+        startLevel() and all listeners are wired) rather than at script
+        load — this both respects browser autoplay policy (which
+        requires a user gesture before audio can play) and guarantees
+        sound setup can never run before or instead of game setup.
+  v0.39 Two fixes per feedback ("sound feels delayed" + "not pleasant"):
+
+        DELAY: sound was firing in squash.onfinish (end of the squash-
+        and-stretch animation), not when the block actually hit — so
+        every plink played a full SQUASH_MS after the visual impact,
+        reading as sluggish. Moved the trigger to anim.onfinish instead,
+        which is the true moment the fall ends and impact happens, right
+        as the squash begins rather than after it completes.
+
+        TONE: switched pitch step from a tritone (6 semitones — the most
+        dissonant interval in Western music, harsh by definition) to a
+        whole-tone step (2 semitones), so a 16-block run climbs a
+        whole-tone scale (~2.67 octaves) instead of repeatedly hitting
+        the harshest possible interval. Also gave the tone itself more
+        body: was a single bare sine oscillator (can sound thin/buzzy at
+        fast attack), now layers a full-volume fundamental with a quiet,
+        faster-decaying octave-up partial on top — same one-shot,
+        zero-shared-state approach as before (still no risk of notes
+        cutting each other off), just a rounder, more bell-like color.
+  v0.40 Added victory-screen jingle, played once when onWin() fires.
+        Refactored the landing-sound's two-layer tone (fundamental +
+        quiet octave shimmer) out into a standalone playTone(freq,
+        startAtSec, durationSec) function, shared by both the landing
+        plink and this jingle — one oscillator implementation, two call
+        sites, nothing duplicated.
+
+        Pattern (your notation): B4 ~ B4 B4 A4 G4 A4 B4 A4 B4 ~ ~ B4 at
+        140ms/beat — parses to B4 held 2 beats, then B4 B4 A4 G4 A4 B4 A4
+        as single beats, then B4 held 3 beats, then a final single B4.
+        10 notes, 13 beats, ~1.82s total. `~` extends the PRECEDING
+        note's held length by one beat, matching your notation exactly.
+
+        Implementation: the whole pattern is parsed once into a flat
+        list of {freq, startBeat, beats}, then every note is scheduled
+        in a single pass via playTone's startAtSec offset — this is one
+        batch of pre-scheduled Web Audio nodes fired together, NOT a
+        step-by-step setTimeout loop, so the sequence can't be thrown
+        off by frame drops or tab backgrounding once triggered. Each
+        note plays for 85% of its held beat length (not the full 100%)
+        so multi-beat notes still read as clearly "held" without
+        completely smearing into whatever note comes right after.
+
+        Added noteNameToFreq() for standard note-name → Hz conversion
+        (equal temperament, A4=440Hz) so the pattern can be written in
+        your musical notation directly rather than raw frequencies.
+  v0.41 Added slight pitch variation for single-box moves ("feels like
+        plucking the same cord each time" — true, single-box moves
+        always landed at exactly BASE_FREQ_HZ with zero variance).
+        Single-box moves now randomly pick from [-2, 0, 0, +2] semitones
+        off the base note per landing (weighted toward "no change" — 2 of
+        4 outcomes — so it reads as gentle variation, not randomness).
+        Multi-box moves are completely untouched: the first block in a
+        stack still lands at exactly BASE_FREQ_HZ every time, since every
+        later block's pitch in that stack climbs relative to it — adding
+        randomness there would make the whole stack's ascending scale
+        unpredictable instead of musical. flyBlocksToColumn's own `count`
+        parameter (already in scope at the call site) is used to detect
+        single-box moves via count===1, no new state needed.
+  v0.42 Added a column-complete jingle: plays when a column becomes full
+        AND single-color as a direct result of the move just made. New
+        isColumnComplete(colIndex) helper reuses the exact same "full +
+        every value equal" check as isSolved(), just scoped to one
+        column. Checked against the move's destination column only
+        (right in the onDone callback, alongside the existing isSolved()
+        check) — a move can only ever complete the column it just landed
+        in, so no need to scan the whole board.
+
+        Pattern (your notation): E3 F3 E3 G3 A3 E4 ~ ~ E4 at 90ms/beat —
+        5 single-beat notes, then E4 held 3 beats, then a final single
+        E4. 7 notes, 9 beats, 810ms total.
+
+        Refactored playVictoryJingle's parse/schedule logic out into a
+        shared playJinglePattern(pattern, tempoMs) function — both the
+        victory jingle and this one now call the same parser/scheduler
+        with their own pattern + tempo, no duplicated logic.
+
+        If a move both completes a column AND solves the whole board in
+        the same move, both jingles are allowed to play together (layered,
+        same one-shot approach as everything else in this sound system) —
+        deliberate, not a bug: reads as a little flourish ahead of the
+        bigger victory swell rather than a glitch.
+  v0.43 Added column-complete VISUAL to accompany the v0.42 jingle: a
+        diagonal (45°) white shine band sweeps from the bottom of the
+        completed column to the top over 550ms, then disappears; the
+        instant it disappears, every block in that column throbs once
+        (a quick scale-pulse, 0.32s).
+
+        Deliberately built as a boardWrap-level overlay (Sandwich
+        Programming: playColumnCompleteShine is its own independent
+        start→filling→end unit, triggered from the same "column just
+        completed" cue as the jingle, with its own internal animation
+        finishing itself), NOT as an element appended inside the
+        .column div — render() completely rebuilds every .column
+        element on every single block landing, so anything appended
+        inside a column gets destroyed mid-animation the moment the
+        next render() runs. boardWrap is only ever appended to, never
+        torn down (same reason flying blocks already live there), so
+        the shine safely survives its full travel no matter how many
+        times render() fires elsewhere while it's running.
+
+        The throb re-queries the column's blocks at animation-finish
+        time rather than reusing a reference captured when the shine
+        started, since render() may have rebuilt that column one or
+        more times in the intervening 550ms — always throbs whatever
+        blocks are actually on screen right now.
+  v0.44 Tuned the column-complete shine per feedback: slowed the sweep
+        550ms→950ms and raised peak opacity 0.85→1.0 (fully solid white
+        at the band's center) for a more visible, less rushed cartoon
+        shine effect.
+  v0.45 Added idle-hint nudge: after 45s of no input, throbs the top
+        block of every column that currently has at least one legal
+        move available, then repeats that throb every 5s until the
+        player acts again.
+
+        Per your request, "legal move" is determined by real move-
+        checking logic (hasLegalMove/columnsWithLegalMove), not a fixed
+        or arbitrary column — verified against the exact debug-log board
+        state from your stalemate report (which is NOT a stalemate: 2
+        legal moves exist, col2→col4 and col3→col5) as a correctness
+        test before wiring this in; the new logic correctly identifies
+        columns 2 and 3 as the ones that should throb on that board.
+        hasLegalMove() deliberately mirrors attemptMove's destOk check
+        line-for-line rather than reimplementing move rules separately,
+        so the hint can never suggest something that isn't actually a
+        real legal move, and can't drift out of sync if move rules
+        change later.
+
+        Sandwich Programming: resetIdleHintTimer() (Start Cue) is called
+        from BOTH real input (pointerdown, which covers taps, drags, AND
+        failed/illegal move attempts — all of those still count as "the
+        player is here") and every completed move landing — either one
+        restarts the same 45s countdown, per "reset after each box
+        moved." stopIdleHintTimer() (End Cue) is called once, in onWin(),
+        so hints can never appear on the end screen. startLevel() also
+        calls resetIdleHintTimer() so every fresh board gets its own
+        clean 45s countdown. triggerIdleHint() no-ops while animating,
+        so a hint can't throb mid-flight and clash with landing/shine
+        animations already in progress.
+  v0.46 Hub integration + layout pass:
+        - Added "Sort Stack" title (#game-title) above the HUD, using
+          #app's existing flex-column gap (18px) for spacing rather than
+          custom margins — same technique now used for every gap in the
+          layout, so spacing stays consistent if it's ever tuned globally.
+        - Added a persistent mute button (#btn-mute) in the HUD, next to
+          the move counter. State (`isMuted`) is checked in ONE place —
+          the top of playTone(), the single shared entry point every
+          sound in the game already funnels through (landing plinks,
+          victory jingle, column-complete jingle) — so muting can't be
+          bypassed by any current or future sound call. Persisted via
+          localStorage (this is a downloaded standalone file the player
+          runs directly, not an in-chat artifact, so localStorage is the
+          right tool here); wrapped in try/catch so a blocked/unavailable
+          localStorage (private browsing, some mobile file:// contexts)
+          falls back to unmuted for that session instead of throwing.
+        - Moved Restart out of the HUD and into a new #bottom-bar below
+          board-wrap, paired with a new "← Home" link (href="../", per
+          back-to-hub-snippet.html's documented one-level-up convention)
+          on the opposite side. Both share #app's flex gap for spacing
+          from the board above them.
+        - BREATH_MS (the pause between the board finishing and the win
+          screen appearing) increased 800ms→1100ms, +300ms per request.
+        - Added the Victory Screen fireworks pattern (project doc:
+          victory-screen-component.md) verbatim: dotted-ring SVG bursts
+          anchored to boardWrap, 6 quickly at first then one per second
+          while the win screen is up. Uses this game's existing COLORS
+          array as the firework palette (no new color list needed).
+          stopFireworks() is called from inside closeWin() rather than
+          from each individual "leave this screen" handler — closeWin()
+          is already unconditionally called by startLevel(), which both
+          Restart and Play Again already trigger, so this covers every
+          current and future exit path in one place. This directly
+          avoids the exact bug the source doc calls out by name: forgetting
+          stopFireworks() on some exit path leaves the setInterval
+          running forever in the background.
+  v0.47 Fixed title and bottom-bar (Home/Restart) being completely
+        invisible after v0.46 — confirmed real, not a partial-apply: all
+        the markup/CSS/JS from v0.46 was genuinely present in the file
+        (verified by grep), so this wasn't a skipped step, it was a
+        layout bug. Root cause: html/body had `overflow: hidden` on
+        BOTH axes, and #app used a fixed `height: 100%` with
+        `justify-content: center`. Adding the title + its gap and the
+        bottom-bar + its gap (~120px combined) on top of an already-tall
+        board pushed total content height past the viewport on shorter
+        screens — with overflow hidden and the stack centered, the
+        excess got clipped off equally from BOTH ends, making the title
+        (top) and bottom-bar (bottom) vanish completely while the
+        already-fitting, still-centered board+fireworks stayed visible.
+        Not scrollable, not partially visible — invisible, since
+        overflow:hidden hides rather than allows scrolling to reach it.
+
+        Fix: html/body overflow changed to overflow-x:hidden +
+        overflow-y:auto (vertical scroll now available as a fallback
+        instead of silently eating content), and #app changed from a
+        fixed `height: 100%` to `min-height: 100%` so it can grow taller
+        than the viewport when its content needs the room, rather than
+        staying pinned at exactly viewport height and clipping.
+
+        Also clarified BREATH_MS: earlier changed 800→1100 (+300ms per
+        an earlier message), but the follow-up specified 700ms as the
+        TOTAL wait, not an additional increment — set directly to 700,
+        replacing both prior values rather than stacking on top of them.
+  v0.48 Two changes:
+
+        MUTE BUTTON RELOCATED: moved from #hud into #bottom-bar, stacked
+        directly under Home on the left side (new #bottom-bar-left flex
+        column wrapping both), Restart remains alone on the right.
+        #hud now holds only the move counter. All JS references use
+        getElementById, which doesn't care about DOM position, so no
+        script changes were needed beyond the wiring already in place.
+
+        RESPONSIVE AUTO-SCALING (desktop vs. phone): previously
+        board-wrap/hud/bottom-bar all used a flat `min(92vw, 420px)` —
+        reacts to viewport WIDTH only. Verified by calculation that a
+        16-capacity, 6-column board at the 420px width cap works out to
+        roughly 730px tall on its own (before title/hud/bottom-bar/gaps
+        are even added) — on a short/wide desktop browser window this
+        can exceed available vertical space even though there's ample
+        horizontal room, since nothing was reading viewport HEIGHT at
+        all. Replaced with a shared `--board-max-w` custom property:
+        `min(92vw, 420px, max(50px, calc((92vh - 200px) / 1.75)))` — the
+        third term reserves ~200px for the title/hud/bottom-bar/gaps/
+        padding, converts the remaining vertical budget into an
+        equivalent width using ~1.75 (the board's own measured height-
+        to-width ratio at this capacity/column-count), and the whole
+        thing is floored at 50px so a pathologically short viewport
+        can't drive it negative. All three elements (#hud, #bottom-bar,
+        #board-wrap) now reference var(--board-max-w) instead of
+        duplicating the formula. Verified against 6 realistic viewport
+        scenarios (phones portrait/landscape, laptop windows, large
+        desktop, a deliberately extreme short window) before shipping —
+        board width now shrinks in response to constrained height, not
+        just constrained width, on every scenario tested. The existing
+        preview-shrink debug toggle (`!important` override) is
+        unaffected — important-flagged fixed values still win regardless
+        of what the base width's source expression is.
+  v0.49 Two changes:
+
+        REMOVED preview-scaling system entirely, per request: the
+        "Preview Rescale" debug button, its click handler, and the
+        `body.preview-shrink` CSS override block are all gone. This was
+        a manual dev toggle for shrinking the board to fit the in-chat
+        preview window specifically — now superseded by v0.48's
+        height-aware --board-max-w, which already handles constrained
+        viewports automatically without needing a manual toggle.
+
+        DOUBLED board size per feedback ("a bit tiny... double its
+        size"). Left the 92vw term alone — on phones this is usually
+        already the binding constraint (board already close to full
+        screen width there), so scaling it wouldn't change anything on
+        the devices most likely to be width-constrained. Doubled the two
+        terms that actually control desktop/laptop sizing instead: the
+        flat width cap 420px→840px, and the height-term's ratio divisor
+        1.75→0.875 (a smaller divisor yields a larger result for the
+        same leftover vertical space, so the board can now reach up to
+        2x its previous width for the same amount of room). Re-verified
+        against the same viewport scenarios as v0.48's original math:
+        phones barely move (already width-bound), laptop/desktop windows
+        get close to 2x the previous board size whenever space allows,
+        and the extreme-short-viewport floor (50px) still holds — the
+        height-aware formula means "double" can't reintroduce the
+        vertical-overflow bug v0.47 fixed, since the height term still
+        caps things down on any screen that's actually short on room.
+  v0.50 Fixed mute button being covered by the fixed-position Debug
+        button on mobile: #btn-debug-toggle sits at position:fixed;
+        left:6px; bottom:6px — the exact bottom-left screen corner —
+        which is right where v0.48's stacked #bottom-bar-left (Home on
+        top, Mute directly under it) landed. Changed #bottom-bar-left
+        from a vertical stack (flex-direction: column) to a horizontal
+        row (flex-direction: row) — Mute now sits beside Home instead of
+        underneath it, out from under the debug button's corner.
+  v0.51 Rewrote board auto-scaling from scratch — the CSS-only
+        --board-max-w formula (v0.48/v0.49) was still overflowing
+        desktop windows per a screenshot report showing the board
+        running well past the bottom edge. Root cause: that formula
+        baked in a GUESSED height/width ratio (~1.75, later ~0.875) and
+        a GUESSED flat pixel reservation (~200px) for the surrounding
+        chrome, both estimated from a single measurement at the time
+        they were written. Neither could self-correct — when the mute
+        button moved into the bottom bar (v0.50) and the board was
+        doubled (v0.49), the real chrome height and real board
+        proportions both changed, but the hardcoded constants didn't,
+        so the CSS quietly stopped matching reality.
+
+        Replaced entirely with a JS-driven, MEASURED approach:
+        updateBoardScale() reads the actual rendered offsetHeight of
+        #game-title, #hud, and #bottom-bar, plus #app's real computed
+        padding and gap values (getComputedStyle, not re-guessed
+        numbers), to get the exact vertical space actually left for the
+        board. widthForBoardHeight() then solves for the board width
+        that produces EXACTLY that height, using the literal algebraic
+        inverse of #board-wrap's real CSS geometry (same padding,
+        column count, capacity, block aspect ratio, and gap constants
+        the CSS itself uses) — not an approximated ratio. Verified this
+        inverse function round-trips exactly (width→height→width, exact
+        match) before wiring it in, then simulated it against 5
+        viewport scenarios including a window sized to match the
+        screenshot's reported overflow — every scenario now fits with
+        zero overflow, by construction, since it's solving the real
+        equation rather than approximating it.
+
+        Sets the result as --board-max-w via inline style on #app
+        (JS-set custom property, same variable name #hud/#bottom-bar/
+        #board-wrap already consume, so no changes needed on their
+        side). Runs once on load (before startLevel(), so the very
+        first render already has correct sizing) and on every window
+        resize, batched through requestAnimationFrame so rapid resize
+        events during a window drag don't trigger redundant
+        measurement/layout passes. Viewport WIDTH is still respected
+        too (92vw cap) so a tall narrow phone can't get pushed wider
+        than its own screen by the height-derived value; floor raised
+        160px (was 50px) and ceiling kept at 840px, both independent
+        safety bounds around the measured result.
+  v0.52 Added +20% board scale-up per feedback (v0.51's exact-fit sizing
+        read as a bit conservative in practice). This went through two
+        iterations before shipping:
+
+        First attempt multiplied the available-height BUDGET by 1.2
+        before solving for width, then only re-clamped the resulting
+        WIDTH against viewport-width caps — simulated this against the
+        same test scenarios used to verify v0.51 and it overflowed on
+        EVERY one of them, since multiplying an already-exact height
+        budget by 1.2 doesn't create real screen space, and a
+        width-only clamp was never checking for a height-based
+        overflow. Caught this before shipping by testing it, not by
+        inspection.
+
+        Corrected approach: compute the exact-fit width first (this is
+        the TRUE ceiling, zero margin), scale THAT width up by 1.2, then
+        explicitly check the resulting height against the real
+        available height — if scaling pushed it over, fall back to the
+        exact-fit width instead. This required a NEW heightForBoardWidth()
+        function (the forward direction: width→height, mirroring the
+        real CSS) — width→height and height→width are close to but not
+        exactly linearly proportional to each other (fixed padding
+        offsets break exact proportionality, confirmed by testing), so
+        checking the actual resulting height rather than assuming "1.2x
+        width = 1.2x height" was necessary for correctness.
+
+        Also: initially wrote heightForBoardWidth() as a call inside
+        updateBoardScale() without having actually defined the function
+        yet — would have thrown ReferenceError at runtime despite
+        passing a plain syntax check (node --check validates syntax, not
+        that every referenced function exists). Caught this specifically
+        by extracting the REAL shipped code out of this file and
+        executing it directly in Node (not a hand-copied reimplementation
+        of it) before calling this done — that's what surfaced the
+        missing function, and confirms the final shipped logic actually
+        runs and produces the right numbers, not just that it parses.
+  v0.53 Fixed the REAL bug behind "ironically unchanged in scale" — the
+        v0.52 fallback check was self-defeating by construction, not
+        just occasionally too conservative. trueAvailableHeight was
+        defined as the absolute ceiling (100% of the real leftover
+        space after chrome), and the scale-up was only kept if it still
+        fit UNDER that same ceiling — but 1.2x a value can mathematically
+        never be ≤ that same value, so the "does it still fit?" check
+        failed on literally every call, on every screen, unconditionally.
+        Not an edge case that slipped through simulation — a guaranteed-
+        every-time failure that looked fine in v0.52's isolated logic
+        tests only because those tests never happened to probe "does
+        this ever grant the scale-up at all", just "does it overflow
+        when it doesn't."
+
+        Fix: removed the self-referential fit-check entirely. The +20%
+        is now applied directly to the measured available height before
+        solving for width — widthForBoardHeight(trueAvailableHeight *
+        1.2) — with no attempt to re-validate against the unscaled
+        ceiling, since that ceiling was the thing making growth
+        impossible in the first place. This deliberately allows the
+        board to extend past the exact chrome-reserved space on most
+        real screens (window.innerHeight already excludes browser UI,
+        and rendering has some natural slack); on a screen with truly
+        zero slack, the overflow-y:auto safety net from v0.47 means
+        worst case is a few px of scroll, not a broken layout — a far
+        smaller risk than the guaranteed-no-op this replaces. Re-tested
+        by extracting and executing the actual corrected code: the
+        803.44-available/459px-exact-fit case now correctly produces
+        ~543px (real growth, not a no-op), and a laptop-window scenario
+        went from 261px to ~306px, both properly proportional to the
+        requested +20% before viewport-width/ceiling clamps trim it.
+*/
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: #1b1f27;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow-x: hidden;
+  overflow-y: auto; /* was overflow: hidden (both axes) — with the title +
+    bottom-bar added, total stacked content height can exceed shorter
+    viewports; hidden-Y meant anything past the edge was silently
+    invisible (not just clipped-but-scrollable), which is exactly what
+    made the title and bottom bar vanish entirely on some screens while
+    the vertically-centered board stayed visible. Allowing vertical
+    scroll means worst case the player scrolls a few px — never a
+    silently missing element again. */
+  touch-action: manipulation;
+}
+#app {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 100%; /* was height: 100% — a fixed height keeps #app pinned to
+    exactly the viewport size even when its content (title + hud + board +
+    bottom-bar, all with gaps) needs more room than that, which combined
+    with centering pushed the top/bottom rows outside the visible area.
+    min-height lets #app grow taller than the viewport when it needs to,
+    with the new overflow-y:auto on body providing scroll access to
+    whatever doesn't fit. */
+  gap: 18px;
+  padding: 16px;
+  /* --board-max-w is set directly by JS (see updateBoardScale()), not
+     computed here via a guessed height/width ratio and a guessed pixel
+     reservation for surrounding chrome. The previous CSS-only version
+     assumed a fixed ~1.75 height/width ratio and a flat ~200px chrome
+     reservation — both were estimates from ONE measurement at the time
+     they were written, and silently went stale the moment the
+     surrounding layout changed (mute button moved into the bottom bar,
+     board size was doubled) since nothing was re-deriving them from the
+     real DOM. Falls back to 92vw here only for the instant before JS
+     runs on first paint. */
+  --board-max-w: min(92vw, 840px);
+}
+#game-title {
+  color: #f2f4f8;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  margin: 0;
+}
+#hud {
+  display: flex; align-items: center; justify-content: center;
+  width: var(--board-max-w);
+  color: #cfd3dc;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+#bottom-bar {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  width: var(--board-max-w);
+}
+#bottom-bar-left {
+  display: flex; flex-direction: row; align-items: center;
+  gap: 8px;
+}
+#btn-home {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #645394;
+  background: transparent;
+  color: #645394;
+  text-decoration: none;
+  cursor: pointer;
+}
+#btn-home:active { background: rgba(100,83,148,0.15); }
+#btn-mute {
+  font-size: 16px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: none;
+  background: #3a8bff;
+  color: white;
+  cursor: pointer;
+  line-height: 1;
+}
+#btn-mute.muted {
+  background: #3a4152;
+  color: #8b93a3;
+}
+#bottom-bar #btn-restart-hud {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  background: #3a8bff;
+  color: white;
+  cursor: pointer;
+}
+#board-wrap {
+  position: relative;
+  width: var(--board-max-w);
+  background: #262b36;
+  border-radius: 16px;
+  padding: 16px 10px;
+}
+#columns-container {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.column {
+  flex: 1;
+  display: flex;
+  flex-direction: column-reverse;
+  touch-action: none; /* prevent the browser from treating a sustained
+    press-drag as a pan/scroll gesture, which was swallowing pointerup
+    before it reached our code */
+  gap: 2px;
+  background: #1b1f27;
+  border-radius: 8px;
+  padding: 4px;
+  min-height: 0;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, transform 0.1s;
+  cursor: pointer;
+}
+.column.selected {
+  border-color: #fff;
+  transform: translateY(-4px);
+}
+.block {
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
+  border-radius: 2px;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.25), inset 0 3px 0 rgba(255,255,255,0.15);
+}
+.block.empty-slot {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+.block.flying {
+  position: absolute;
+  z-index: 150;
+  pointer-events: none;
+  top: 0;
+  left: 0;
+  will-change: transform;
+  backface-visibility: hidden;
+  transform-origin: bottom center;
+}
+
+/* Column-complete shine sweep: a diagonal (45°) white band that travels
+   from the bottom of the completed column to the top, then disappears.
+   Positioned as an absolutely-placed element on boardWrap (NOT inside
+   the column itself) sized/clipped to exactly that column's live
+   bounding rect — render() rebuilds every .column element on every move
+   landing, so anything appended INSIDE a column would be destroyed
+   mid-animation. boardWrap is never rebuilt, only appended to (same
+   pattern the flying blocks already use), so this survives safely for
+   its full duration regardless of what render() does elsewhere. */
+.column-shine-clip {
+  position: absolute;
+  z-index: 160; /* above flying blocks (150), below UI overlays (300) */
+  pointer-events: none;
+  overflow: hidden; /* clips the diagonal band to exactly this column's rect */
+  border-radius: 8px; /* match .column's rounding so the clip edge looks native */
+}
+.column-shine-band {
+  position: absolute;
+  /* wide + tall enough that a 45°-rotated band still fully covers the
+     column's width at any point along its vertical travel, with margin
+     to spare on both sides */
+  width: 220%;
+  height: 40px;
+  left: -60%;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0) 0%,
+    rgba(255,255,255,1) 50%,
+    rgba(255,255,255,0) 100%
+  );
+  transform: rotate(-45deg);
+  transform-origin: center;
+}
+
+/* Throb: a single quick scale-pulse on the completed column's blocks,
+   timed to start right as the shine reaches the top and disappears. */
+@keyframes blockThrob {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.block.throb {
+  animation: blockThrob 0.32s ease-out;
+}
+
+/* overlay (win screen) */
+.overlay{
+  position:fixed; inset:0;
+  background:rgba(0,0,0,0.88);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:16px;
+  z-index:100;
+  visibility:hidden;
+  opacity:0;
+  transition:opacity 0.2s;
+}
+.overlay.show{ visibility:visible; opacity:1; }
+.overlay h2{ margin:0; font-size:28px; letter-spacing:1px; position:relative; z-index:1; }
+.overlay button{
+  font-size:16px;
+  font-weight:700;
+  padding:10px 22px;
+  border-radius:8px;
+  border:none;
+  background:#3a8bff;
+  color:white;
+  cursor:pointer;
+  position:relative; z-index:1;
+}
+.overlay.win h2{
+  color:#2ecc71;
+  font-weight:900;
+  font-size:34px;
+  text-shadow:0 0 10px rgba(46,204,113,0.6), 0 2px 0 #0a3d1f;
+}
+
+/* debug button */
+#btn-debug-toggle{
+  position:fixed; left:6px; bottom:6px; z-index:300;
+  font-size:10px; font-weight:700; padding:3px 8px;
+  border-radius:5px; border:1px solid #2a2a2a;
+  background:transparent; color:#3a3a3a; cursor:pointer;
+}
+#btn-debug-toggle:active{ background:rgba(255,255,255,0.05); }
+#debug-panel{
+  position:fixed; left:6px; bottom:32px; z-index:300;
+  display:none; flex-direction:column; gap:4px;
+}
+#debug-panel.show{ display:flex; }
+#debug-panel button{
+  font-size:10px; font-weight:700; padding:3px 8px;
+  border-radius:5px; border:1px solid #444;
+  background:#1b2830; color:#888; cursor:pointer; text-align:left;
+}
+#debug-panel button:active{ background:#243440; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <h1 id="game-title">Sort Stack</h1>
+  <div id="hud">
+    <span id="move-count">Moves: 0</span>
+  </div>
+  <div id="board-wrap"><div id="columns-container"></div></div>
+  <div id="bottom-bar">
+    <div id="bottom-bar-left">
+      <a id="btn-home" href="../">Home</a>
+      <button id="btn-mute" aria-label="Mute sound">&#128266;</button>
+    </div>
+    <button id="btn-restart-hud">Restart</button>
+  </div>
+</div>
+
+<div class="overlay win" id="overlay-win">
+  <h2>Sorted!</h2>
+  <div id="win-moves" style="color:#cfd3dc; font-size:14px; margin-top:-8px;"></div>
+  <button id="btn-next">Play Again</button>
+</div>
+
+<button id="btn-debug-toggle">Debug</button>
+<div id="debug-panel">
+  <button id="btn-debug-restart">Restart</button>
+  <button id="btn-debug-solve">Solve</button>
+  <button id="btn-logs">Logs</button>
+</div>
+
+<script>
+/* ---------- sound (landing plinks) ----------
+   Built with raw Web Audio API — deliberately NOT Tone.js/any CDN. Last
+   attempt used Tone.js from a CDN and caused a total input freeze in the
+   in-chat preview (confirmed after the fact to be a preview-sandbox
+   quirk, not a real bug — downloaded/real-device builds worked fine the
+   whole time). Going dependency-free this time removes that risk-class
+   entirely, matches the manual-oscillator pattern already used
+   elsewhere (EmojiMon SoundManager), and means sound can NEVER be the
+   reason the whole game fails to load, on any platform.
+
+   Everything here is wrapped defensively — if the browser doesn't
+   support Web Audio at all, `audioCtx` stays null and playLandingSound
+   silently no-ops. Nothing here runs at script-top-level except a single
+   `let audioCtx = null;` declaration — actual AudioContext creation is
+   deferred until the first real user gesture (see initAudioOnFirstInput
+   below), since browsers block autoplay of audio before any interaction
+   anyway, so creating it eagerly would be pointless even if it were
+   safe.
+*/
+let audioCtx = null;
+let audioInitAttempted = false;
+
+// Mute state, persisted across sessions via localStorage. This is a
+// standalone downloaded HTML file the player runs directly (not an
+// in-chat artifact), so localStorage is the right tool here — it just
+// needs to survive the player closing and reopening the file/tab.
+// Wrapped in try/catch: some browsers block localStorage entirely in
+// certain contexts (private browsing, file:// restrictions on some
+// mobile browsers) — a blocked localStorage should never crash the game,
+// it should just fall back to "not muted" for that session.
+const MUTE_STORAGE_KEY = 'sortstack_muted';
+let isMuted = false;
+try {
+  isMuted = localStorage.getItem(MUTE_STORAGE_KEY) === 'true';
+} catch(err) {
+  isMuted = false; // localStorage unavailable — default to unmuted, never throw
+}
+
+function setMuted(muted){
+  isMuted = muted;
+  try { localStorage.setItem(MUTE_STORAGE_KEY, muted ? 'true' : 'false'); }
+  catch(err) { /* localStorage unavailable — mute still works for this session, just won't persist */ }
+  const btn = document.getElementById('btn-mute');
+  if(btn){
+    btn.classList.toggle('muted', muted);
+    btn.innerHTML = muted ? '&#128263;' : '&#128266;'; // muted speaker vs speaker-with-waves
+    btn.setAttribute('aria-label', muted ? 'Unmute sound' : 'Mute sound');
+  }
+}
+
+function initAudioOnFirstInput(){
+  if(audioInitAttempted) return;
+  audioInitAttempted = true;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC){ console.warn('Web Audio not supported — game will run silently.'); return; }
+    audioCtx = new AC();
+  } catch(err) {
+    console.warn('Audio init failed — game will run silently.', err);
+    audioCtx = null;
+  }
+}
+
+// Each landing's pitch is derived directly from that block's leadOrder
+// (its fixed position in the landing sequence, assigned once per move —
+// see flyBlocksToColumn), not a shared mutable counter. This avoids any
+// risk of async callback ordering jitter producing an inconsistent pitch
+// sequence under real-world frame drops.
+
+// One tritone (6 semitones) per box, compounding off the base pitch of
+// whichever box landed first in this move. Semitone ratio is the 12th
+// root of 2, so N semitones up = 2^(N/12).
+const SEMITONES_PER_BOX = 2; // whole-tone step — a full 16-box run climbs
+                              // ~2.67 octaves through a whole-tone scale,
+                              // which avoids landing on the harsh tritone
+                              // interval a bigger step would repeatedly hit
+const BASE_FREQ_HZ = 220; // A3 — comfortable mid-low base "plink" pitch
+
+// Shared two-layer tone generator: a full-volume fundamental plus a
+// quiet, faster-decaying octave-up partial on top, for a rounder,
+// bell-like character (a single bare sine tends to sound thin/buzzy at
+// fast attack). Used by both the landing-plink sound and the victory
+// jingle below — one function, two call sites, no duplicated oscillator
+// setup code to keep in sync.
+//
+// startAtSec: audioCtx.currentTime-relative offset for when this note
+// should begin (0 = right now). durationSec: how long the note rings
+// before fading to silence. Every call creates its own fully independent
+// oscillator+gain node pair — true one-shot behavior, nothing shared or
+// reused, so any number of overlapping/scheduled notes can never steal
+// or cut off from one another.
+function playTone(freq, startAtSec, durationSec){
+  if(!audioCtx || isMuted) return; // isMuted guards ALL sound in the game — every landing
+                                    // plink, the victory jingle, and the column-complete
+                                    // jingle all funnel through this one function, so one
+                                    // check here is sufficient; no need to guard each caller.
+  const now = audioCtx.currentTime;
+  const startAt = now + startAtSec;
+  const attack = 0.005;
+  const decay = durationSec;
+
+  const playPartial = (partialFreq, peakGain, partialDecay) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = partialFreq;
+
+    // linear ramps (not exponential) — widely supported, no edge cases
+    // with exponentialRampToValueAtTime's "can't ramp to exactly 0" quirk
+    gain.gain.setValueAtTime(0, startAt);
+    gain.gain.linearRampToValueAtTime(peakGain, startAt + attack);
+    gain.gain.linearRampToValueAtTime(0, startAt + attack + partialDecay);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(startAt);
+    osc.stop(startAt + attack + partialDecay + 0.02);
+  };
+
+  playPartial(freq, 0.22, decay);              // fundamental — the "main" note
+  playPartial(freq * 2, 0.08, decay * 0.6);     // quiet octave-up shimmer, fades faster
+  // let the browser garbage-collect these nodes naturally once stopped —
+  // no manual cleanup needed, each oscillator is single-use by design
+}
+
+// Single-box moves always land at exactly BASE_FREQ_HZ, so a run of
+// single-box moves in a row plays the literal identical note every
+// time — "plucking the same cord". This offers a small set of nearby
+// semitone offsets to randomly pick from for JUST single-box moves, so
+// repeated single moves feel varied rather than mechanically identical.
+// Multi-box moves are untouched: their first landing must stay locked to
+// BASE_FREQ_HZ exactly, since every following box's pitch in that stack
+// is computed relative to it (see SEMITONES_PER_BOX climb) — randomizing
+// the anchor note would make the whole stack's climb unpredictable.
+const SINGLE_BOX_VARIATION_SEMITONES = [-2, 0, 0, 2]; // whole tone down, none (x2, more common), whole tone up
+
+function playLandingSound(pitchIndexInStack, isSingleBoxMove){
+  if(!audioCtx) return; // audio unavailable or not yet initialized — silently skip, game unaffected
+  try {
+    let semitoneOffset = pitchIndexInStack * SEMITONES_PER_BOX;
+    if(isSingleBoxMove){
+      const variation = SINGLE_BOX_VARIATION_SEMITONES[
+        Math.floor(Math.random() * SINGLE_BOX_VARIATION_SEMITONES.length)
+      ];
+      semitoneOffset += variation;
+    }
+    const freq = BASE_FREQ_HZ * Math.pow(2, semitoneOffset / 12);
+    // Each call creates its own oscillator(s) + gain node(s) — these are
+    // cheap, one-shot, and fully independent of each other. This is the
+    // direct equivalent of "Play One Shot": calling this 16 times in
+    // quick succession creates 16 independent overlapping sounds, not 16
+    // competing triggers on one shared voice. No shared/global oscillator
+    // node exists anywhere in this file, so there is nothing for
+    // overlapping calls to steal or cut off from one another.
+    playTone(freq, 0, 0.28);
+  } catch(err) {
+    // never let a sound failure affect gameplay
+  }
+}
+
+// Standard note-name → frequency (equal temperament, A4 = 440Hz).
+function noteNameToFreq(name){
+  const NOTE_SEMITONES = { C:-9, 'C#':-8, D:-7, 'D#':-6, E:-5, F:-4, 'F#':-3, G:-2, 'G#':-1, A:0, 'A#':1, B:2 };
+  const m = name.match(/^([A-G]#?)(\d)$/);
+  const [, letter, octaveStr] = m;
+  const octave = parseInt(octaveStr, 10);
+  const semitoneFromA4 = NOTE_SEMITONES[letter] + (octave - 4) * 12;
+  return 440 * Math.pow(2, semitoneFromA4 / 12);
+}
+
+// Shared jingle player, written in the [Xms] notation: `~` extends the
+// PRECEDING note by one more beat (so "B4 ~" = B4 held for 2 beats
+// total), a plain note name is a new 1-beat note. Parses the pattern
+// once into a flat list of {freq, startBeat, beats} notes, then
+// schedules all of them at once via playTone's startAtSec offset — this
+// is a single one-shot burst of pre-scheduled notes, not a step-by-step
+// timer loop, so it can't be disrupted by frame drops once triggered.
+// Used by both the victory jingle and the column-complete jingle below —
+// one parser/scheduler, two patterns.
+function playJinglePattern(pattern, tempoMs){
+  if(!audioCtx) return;
+  try {
+    const notes = []; // { freq, startBeat, beats }
+    pattern.forEach(token => {
+      if(token === '~'){
+        if(notes.length > 0) notes[notes.length - 1].beats += 1;
+      } else {
+        notes.push({ freq: noteNameToFreq(token), startBeat: 0, beats: 1 });
+      }
+    });
+    // fill in each note's actual start beat now that final lengths are known
+    let cursor = 0;
+    notes.forEach(n => { n.startBeat = cursor; cursor += n.beats; });
+
+    const beatSec = tempoMs / 1000;
+    notes.forEach(n => {
+      const startAtSec = n.startBeat * beatSec;
+      // slightly shorter than the full held length so notes don't
+      // completely smear into the next one, but still clearly "held"
+      // for multi-beat notes rather than sounding like a single blip
+      const durationSec = (n.beats * beatSec) * 0.85;
+      playTone(n.freq, startAtSec, durationSec);
+    });
+  } catch(err) {
+    // never let a sound failure affect gameplay
+  }
+}
+
+const VICTORY_TEMPO_MS = 140;
+const VICTORY_PATTERN = ['B4','~','B4','B4','A4','G4','A4','B4','A4','B4','~','~','B4'];
+function playVictoryJingle(){
+  playJinglePattern(VICTORY_PATTERN, VICTORY_TEMPO_MS);
+}
+
+const COLUMN_COMPLETE_TEMPO_MS = 90;
+const COLUMN_COMPLETE_PATTERN = ['E3','F3','E3','G3','A3','E4','~','~','E4'];
+function playColumnCompleteJingle(){
+  playJinglePattern(COLUMN_COMPLETE_PATTERN, COLUMN_COMPLETE_TEMPO_MS);
+}
+
+/* ---------- config ---------- */
+const COLUMN_COUNT = 6;
+const COLUMN_CAPACITY = 16;
+const COLOR_COUNT = 4; // number of distinct block types in play
+const COLORS = ['#e94b4b', '#3aa1ff', '#3ad07a', '#f0b93a', '#a55ee0', '#ff8fc9', '#4bd0d0'].slice(0, COLOR_COUNT);
+
+/* ---------- state ---------- */
+let columns = [];       // array of arrays; each inner array is a stack, index 0 = bottom
+let selected = null;    // index of selected column, or null — the ONLY state that drives move logic
+let pressHighlight = null; // PURELY VISUAL: column highlighted during an active press/hold.
+                            // Deliberately kept separate from `selected` so a fast tap's own
+                            // pointerdown can never be mistaken for a second, later tap on an
+                            // already-selected column.
+let pendingGestureSource = null; // column where the CURRENT press started, or null between gestures
+let lastHoverCol = null; // most recent column the pointer was actually confirmed over during
+                          // the current gesture — needed because a fast flick's pointerup
+                          // coordinates can land outside any column (finger already lifting
+                          // past the edge), even though it was clearly over a column a moment
+                          // earlier. elementFromPoint at release time alone isn't reliable at speed.
+let moveCount = 0;
+let animating = false;  // true while a flight animation is in progress; blocks input
+
+/* ---------- idle hint (nudge after 45s of no input) ----------
+   Sandwich Programming: resetIdleHintTimer() is the Start Cue, called
+   from every real input (pointerdown) and every completed move — either
+   one means "the player is actively engaged," so both restart the same
+   45s countdown. triggerIdleHint() is the filling: it throbs whatever
+   columns currently have a legal move, using the SAME hasLegalMove()
+   logic attemptMove() itself uses, so the hint can never suggest a move
+   that isn't actually legal. stopIdleHintTimer() is the End Cue, called
+   once at the win screen — no hint should ever appear once the game is
+   already over.
+*/
+let idleHintTimeoutId = null;   // the initial 45s wait before the FIRST throb
+let idleHintIntervalId = null;  // the repeating 5s throb after that
+
+function resetIdleHintTimer(){
+  clearTimeout(idleHintTimeoutId);
+  clearInterval(idleHintIntervalId);
+  idleHintIntervalId = null;
+  idleHintTimeoutId = setTimeout(() => {
+    triggerIdleHint(); // first throb, right at the 45s mark
+    idleHintIntervalId = setInterval(triggerIdleHint, 5000); // then every 5s after that
+  }, 45000);
+}
+
+function stopIdleHintTimer(){
+  clearTimeout(idleHintTimeoutId);
+  clearInterval(idleHintIntervalId);
+  idleHintTimeoutId = null;
+  idleHintIntervalId = null;
+}
+
+function triggerIdleHint(){
+  if(animating) return; // don't throb mid-flight — wait for the board to settle
+  const hintCols = columnsWithLegalMove();
+  hintCols.forEach(ci => {
+    const colEl = columnsContainer.children[ci];
+    if(!colEl) return;
+    // top block = the LAST real (non-empty-slot) block element in the
+    // column, since .column is column-reverse (index 0 = bottom, so the
+    // visually topmost block is the last one appended in render()).
+    const realBlocks = colEl.querySelectorAll('.block:not(.empty-slot)');
+    const topBlock = realBlocks[realBlocks.length - 1];
+    if(!topBlock) return;
+    topBlock.classList.remove('throb');
+    void topBlock.offsetWidth; // force reflow so re-adding retriggers the CSS animation
+    topBlock.classList.add('throb');
+  });
+}
+
+const boardWrap = document.getElementById('board-wrap');
+const columnsContainer = document.getElementById('columns-container');
+const moveCountEl = document.getElementById('move-count');
+
+const BLOCKS_PER_COLOR = 16; // fixed count regardless of board size
+
+function generateBoard(){
+  // fixed multiset: COLOR_COUNT colors x BLOCKS_PER_COLOR each, scattered
+  // fully randomly across all COLUMN_COUNT columns (no reserved empty column,
+  // no even-spread guarantee — a column can end up empty or nearly full by chance).
+  let pool = [];
+  for(let c = 0; c < COLOR_COUNT; c++){
+    for(let i = 0; i < BLOCKS_PER_COLOR; i++) pool.push(c);
+  }
+
+  // shuffle the pool itself (color order)
+  for(let i = pool.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i+1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
+  columns = Array.from({length: COLUMN_COUNT}, () => []);
+
+  // assign each block to a uniformly random column, skipping columns already
+  // at capacity so we never overflow
+  pool.forEach(colorIdx => {
+    let target;
+    let attempts = 0;
+    do {
+      target = Math.floor(Math.random() * COLUMN_COUNT);
+      attempts++;
+    } while(columns[target].length >= COLUMN_CAPACITY && attempts < 200);
+    if(columns[target].length < COLUMN_CAPACITY){
+      columns[target].push(colorIdx);
+    } else {
+      // extreme edge case: every column somehow full — dump in first with room
+      const fallback = columns.findIndex(c => c.length < COLUMN_CAPACITY);
+      if(fallback !== -1) columns[fallback].push(colorIdx);
+    }
+  });
+
+  // avoid trivial already-solved board (rare with random scatter, but cheap to guard)
+  if(isSolved()) return generateBoard();
+}
+
+function isSolved(){
+  return columns.every(col => col.length === 0 ||
+    (col.length === COLUMN_CAPACITY && col.every(v => v === col[0])));
+}
+
+// Same "full and single color" check as isSolved(), scoped to one
+// column — used to detect a column becoming complete mid-game, distinct
+// from the whole board being solved.
+function isColumnComplete(colIndex){
+  const col = columns[colIndex];
+  return col.length === COLUMN_CAPACITY && col.every(v => v === col[0]);
+}
+
+// Mirrors attemptMove's exact destOk check (same file, further down) —
+// deliberately NOT a reimplementation from scratch, so this can never
+// drift out of sync with what actually counts as a legal move in this
+// game. Used only for the idle-hint system below; has no effect on move
+// resolution itself.
+function hasLegalMove(fromCol, toCol){
+  const srcArr = columns[fromCol];
+  const dstArr = columns[toCol];
+  if(srcArr.length === 0) return false;
+  const moving = srcArr[srcArr.length - 1];
+  return dstArr.length < COLUMN_CAPACITY &&
+    (dstArr.length === 0 || dstArr[dstArr.length - 1] === moving);
+}
+
+// Returns the set of column indices that have at least one legal
+// outgoing move available right now — i.e. columns the idle-hint throb
+// should highlight. O(n²) over COLUMN_COUNT (6 columns = 36 checks),
+// trivial cost, fine to call on every hint tick rather than caching.
+function columnsWithLegalMove(){
+  const result = new Set();
+  for(let from = 0; from < COLUMN_COUNT; from++){
+    for(let to = 0; to < COLUMN_COUNT; to++){
+      if(from === to) continue;
+      if(hasLegalMove(from, to)){ result.add(from); break; }
+    }
+  }
+  return result;
+}
+
+// Column-complete visual: a diagonal white shine sweeps from the bottom
+// of the column to the top, then disappears; the moment it disappears,
+// every block in that column throbs once (a quick scale-pulse).
+//
+// The shine element lives on boardWrap, NOT inside the .column itself —
+// render() completely rebuilds every .column element on every block
+// landing (see render()'s comments), so anything appended inside a
+// column would be torn out mid-animation the next time render() runs.
+// boardWrap is only ever appended to, never rebuilt (this is the same
+// pattern flying blocks already use), so the shine safely survives its
+// full travel regardless of what render() does elsewhere in the meantime.
+//
+// Uses the column's LIVE getBoundingClientRect() at call time. This is
+// called from the flight's final onDone callback, which fires after
+// render() has already settled from the last block landing — so the
+// column element and its rect are stable and won't shift again before
+// this reads them.
+function playColumnCompleteShine(colIndex){
+  const colEl = columnsContainer.children[colIndex];
+  if(!colEl) return; // defensive — shouldn't happen, but never let a visual effect throw
+
+  const wrapRect = boardWrap.getBoundingClientRect();
+  const colRect = colEl.getBoundingClientRect();
+
+  const clip = document.createElement('div');
+  clip.className = 'column-shine-clip';
+  clip.style.left = (colRect.left - wrapRect.left) + 'px';
+  clip.style.top = (colRect.top - wrapRect.top) + 'px';
+  clip.style.width = colRect.width + 'px';
+  clip.style.height = colRect.height + 'px';
+
+  const band = document.createElement('div');
+  band.className = 'column-shine-band';
+  clip.appendChild(band);
+  boardWrap.appendChild(clip);
+
+  const SHINE_MS = 950;
+  // Start the (rotated) band fully below the column's visible area and
+  // animate its vertical center up to fully above it — the clip's
+  // overflow:hidden means only the portion currently over the column is
+  // ever visible, so a plain translateY sweep is enough; no need to
+  // account for the 45° rotation in the Y math itself.
+  const anim = band.animate([
+    { transform: 'translateY(' + (colRect.height + 40) + 'px) rotate(-45deg)', offset: 0 },
+    { transform: 'translateY(' + (-colRect.height - 40) + 'px) rotate(-45deg)', offset: 1 }
+  ], { duration: SHINE_MS, easing: 'ease-in-out' });
+
+  anim.onfinish = () => {
+    // Shine's done — remove it, then throb every real block currently in
+    // this column. Re-query at animation-finish time (not using colEl
+    // captured above) since render() may have rebuilt the column element
+    // one or more times during the shine's travel — always throb whatever
+    // blocks are actually on screen right now, not a stale reference.
+    clip.remove();
+    const liveColEl = columnsContainer.children[colIndex];
+    if(!liveColEl) return;
+    const blocks = liveColEl.querySelectorAll('.block:not(.empty-slot)');
+    blocks.forEach(b => {
+      // restart the animation even if somehow already present/mid-run
+      b.classList.remove('throb');
+      void b.offsetWidth; // force reflow so re-adding the class retriggers the CSS animation
+      b.classList.add('throb');
+    });
+  };
+}
+
+// Cheap alternative to render() for press-highlight only: toggles the
+// 'selected' class on existing .column elements directly instead of
+// tearing down and rebuilding every column. Rebuilding mid-gesture (via
+// full render()) was replacing the exact DOM node the pointer was down
+// on, which on some mobile browsers caused pointerdown to re-fire on the
+// replacement element — see the guard comment in the pointerdown handler.
+// This function never touches the DOM tree structure, only classNames,
+// so the elements a pointer is interacting with stay the same elements
+// for the whole gesture.
+function updateHighlightsOnly(){
+  const cols = columnsContainer.children;
+  for(let ci = 0; ci < cols.length; ci++){
+    const isHighlighted = pendingGestureSource !== null
+      ? pressHighlight === ci
+      : (selected === ci || pressHighlight === ci);
+    cols[ci].className = 'column' + (isHighlighted ? ' selected' : '');
+  }
+}
+
+// Height-first responsive sizing. Replaces the earlier CSS-only
+// --board-max-w formula, which guessed a fixed height/width ratio
+// (~1.75) and a fixed pixel reservation (~200px) for the surrounding
+// chrome (title/hud/bottom-bar/gaps) baked directly into a CSS calc().
+// Those were both ESTIMATES taken from one measurement at the time they
+// were written, and had no way to update themselves — they silently
+// went stale the moment the real layout changed (mute button moved
+// into the bottom bar, board size was doubled), which is exactly what
+// produced the overflow in the screenshot report: the guessed ratio no
+// longer matched the real rendered geometry.
+//
+// This version measures the ACTUAL rendered heights of every sibling
+// element (title, hud, bottom-bar) plus #app's real gap/padding values
+// (read from computed style, not re-guessed), figures out exactly how
+// much vertical space is left for board-wrap, and solves for the width
+// that produces EXACTLY that height — using the literal inverse of
+// board-wrap's real CSS geometry (padding, column count, capacity,
+// block aspect ratio, gaps), not an approximated ratio. Verified by
+// round-trip (width→height→width) before shipping — see version log.
+const BOARD_ASPECT = 1.4;       // .block's aspect-ratio (width/height)
+const BLOCK_GAP_PX = 2;         // .column's gap between blocks
+const COLUMN_GAP_PX = 10;       // #columns-container's gap between columns
+const BOARD_PAD_V_PX = 16;      // #board-wrap padding: 16px 10px -> vertical side
+const BOARD_PAD_H_PX = 10;      // #board-wrap padding: 16px 10px -> horizontal side
+const BOARD_WIDTH_FLOOR_PX = 160; // never shrink the board narrower than this, even
+                                   // on a pathologically short viewport — matches the
+                                   // spirit of the old formula's 50px floor, raised
+                                   // since the doubled board makes 50px look broken
+                                   // (blocks would be sliver-thin rather than just small)
+const BOARD_WIDTH_CEILING_PX = 840; // matches the old flat desktop cap — still a
+                                     // sensible "don't get absurd on an ultrawide
+                                     // monitor" ceiling, independent of height
+
+function widthForBoardHeight(targetHeightPx){
+  const colH = targetHeightPx - 2*BOARD_PAD_V_PX;
+  const blockH = (colH - (COLUMN_CAPACITY-1)*BLOCK_GAP_PX) / COLUMN_CAPACITY;
+  const colW = blockH * BOARD_ASPECT;
+  const innerW = colW*COLUMN_COUNT + (COLUMN_COUNT-1)*COLUMN_GAP_PX;
+  return innerW + 2*BOARD_PAD_H_PX;
+}
+
+// Forward direction (mirrors the actual CSS: #board-wrap width -> its
+// rendered height) — needed so the scale-up logic below can check
+// "if I scale this width up, does the resulting height still fit?"
+// without assuming a pure linear relationship between the two (they're
+// NOT perfectly linear — fixed padding offsets break exact
+// proportionality, confirmed by testing before this was added).
+function heightForBoardWidth(W){
+  const innerW = W - 2*BOARD_PAD_H_PX;
+  const colW = (innerW - (COLUMN_COUNT-1)*COLUMN_GAP_PX) / COLUMN_COUNT;
+  const blockH = colW / BOARD_ASPECT;
+  const colH = COLUMN_CAPACITY*blockH + (COLUMN_CAPACITY-1)*BLOCK_GAP_PX;
+  return colH + 2*BOARD_PAD_V_PX;
+}
+
+let updateBoardScaleRAF = null;
+function updateBoardScale(){
+  // rAF-batched: resize can fire many times per second while dragging a
+  // window edge; only ever want the LATEST call in a frame to actually
+  // run the (cheap, but non-zero) measurement + layout write.
+  if(updateBoardScaleRAF) cancelAnimationFrame(updateBoardScaleRAF);
+  updateBoardScaleRAF = requestAnimationFrame(() => {
+    updateBoardScaleRAF = null;
+    const appEl = document.getElementById('app');
+    const titleEl = document.getElementById('game-title');
+    const hudEl = document.getElementById('hud');
+    const bottomBarEl = document.getElementById('bottom-bar');
+    if(!appEl || !titleEl || !hudEl || !bottomBarEl) return; // defensive — shouldn't happen
+
+    const appStyle = getComputedStyle(appEl);
+    const appPadV = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
+    const appGap = parseFloat(appStyle.rowGap || appStyle.gap) || 0;
+    // #app has 4 flex children (title, hud, board-wrap, bottom-bar) -> 3 gaps between them
+    const totalGaps = appGap * 3;
+
+    const chromeHeight = titleEl.offsetHeight + hudEl.offsetHeight + bottomBarEl.offsetHeight
+      + appPadV + totalGaps;
+    const trueAvailableHeight = window.innerHeight - chromeHeight;
+
+    // BOARD_SCALE_FACTOR: per feedback, exact-fit sizing read as
+    // conservative — requested +20%.
+    //
+    // An earlier version of this defined trueAvailableHeight as the
+    // ABSOLUTE ceiling (100% of real leftover space) and only granted
+    // the +20% if scaling up still fit UNDER that same ceiling — which
+    // is mathematically impossible by construction: trueAvailableHeight
+    // already equals the maximum the viewport could ever offer, so
+    // 1.2x that value can NEVER pass a "still fits under 100%" check.
+    // That version fell back to the unscaled exact-fit size on every
+    // single call, which is exactly the "ironically unchanged" bug
+    // reported back — not an edge case, a guaranteed-every-time failure
+    // that pure code inspection missed because the individual pieces
+    // (the fallback check, the clamps) each looked reasonable in
+    // isolation.
+    //
+    // Fix: apply the +20% directly to the measured available height and
+    // USE that as the board's target, without a self-defeating "must
+    // still fit under the un-scaled ceiling" check. This deliberately
+    // allows the board to extend past the exact chrome-reserved space —
+    // on most real screens that's fine (window.innerHeight already
+    // excludes browser UI chrome, and there's typically some slack from
+    // how conservatively fonts/paddings render); on a screen with truly
+    // zero slack, the existing overflow-y:auto on body (from the v0.47
+    // fix) means the worst case is a few pixels of scroll, never a
+    // silently clipped/invisible element — there's no failure mode here
+    // as severe as the ones earlier versions were guarding against.
+    const BOARD_SCALE_FACTOR = 1.2;
+    let targetW = widthForBoardHeight(trueAvailableHeight * BOARD_SCALE_FACTOR);
+
+    // also respect viewport WIDTH — a tall narrow phone shouldn't let the
+    // height-derived value push the board wider than the screen itself
+    const widthCapFromViewport = window.innerWidth * 0.92;
+
+    targetW = Math.min(targetW, widthCapFromViewport, BOARD_WIDTH_CEILING_PX);
+    targetW = Math.max(targetW, BOARD_WIDTH_FLOOR_PX);
+
+    appEl.style.setProperty('--board-max-w', targetW + 'px');
+  });
+}
+
+function render(justMovedTo = null){
+  columnsContainer.innerHTML = '';
+  columns.forEach((col, ci) => {
+    const colEl = document.createElement('div');
+    // While a gesture is actively in progress, show ONLY the press column —
+    // a leftover `selected` from a prior, separate gesture must not also
+    // light up, or a drag started while something else is selected reads
+    // as two simultaneous selections even though only one drives logic.
+    const isHighlighted = pendingGestureSource !== null
+      ? pressHighlight === ci
+      : (selected === ci || pressHighlight === ci);
+    colEl.className = 'column' + (isHighlighted ? ' selected' : '');
+    colEl.dataset.index = ci;
+    colEl.style.setProperty('--capacity', COLUMN_CAPACITY);
+    col.forEach((colorIdx, bi) => {
+      const block = document.createElement('div');
+      block.className = 'block';
+      block.style.background = COLORS[colorIdx];
+      colEl.appendChild(block);
+    });
+    const emptySlots = COLUMN_CAPACITY - col.length;
+    for(let s = 0; s < emptySlots; s++){
+      const slot = document.createElement('div');
+      slot.className = 'block empty-slot';
+      colEl.appendChild(slot);
+    }
+    colEl.addEventListener('pointerdown', () => {
+      // Guard against re-entry: on some mobile browsers, a sustained touch
+      // that lands on a freshly-rebuilt element (which is exactly what
+      // happens below, since render() replaces every .column node) can
+      // re-fire pointerdown on that NEW element as if it were a fresh
+      // press, even though the physical finger never lifted. Each re-fire
+      // called render() again, which built yet another new element,
+      // which could re-fire again — a loop that ate the gesture and
+      // explains the "21 pointerdowns, 2 pointerups" pattern in the logs.
+      // A pointerdown while a gesture is already pending is never a new
+      // gesture — it's this re-target artifact — so ignore it entirely.
+      if(pendingGestureSource !== null) return;
+      resetIdleHintTimer(); // real input detected — restart the 45s idle countdown
+      initAudioOnFirstInput(); // first real user gesture — safe point to create AudioContext,
+                                // matches browser autoplay-policy requirements. No-ops on repeat calls.
+      log(`input: press col${ci}`);
+      pendingGestureSource = ci;
+      lastHoverCol = ci; // gesture starts here, so this is the first known-good hover column
+      if(columns[ci].length > 0){
+        pressHighlight = ci; // cosmetic only — never touches `selected`
+        updateHighlightsOnly();
+      }
+    });
+    // NOTE: pointerup/pointercancel are deliberately NOT bound here on
+    // colEl — see the document-level listeners below for why.
+    columnsContainer.appendChild(colEl);
+  });
+  moveCountEl.textContent = `Moves: ${moveCount}`;
+}
+
+/* ---------- diagnostic log ----------
+   Lightweight ring buffer of recent events, dumped by the Logs button.
+   Captures moves and per-block flight timing so animation bugs (like
+   stutter during a specific phase) can be pinpointed from a paste.
+*/
+const LOG_MAX = 200;
+let logBuffer = [];
+function log(msg){
+  const t = performance.now().toFixed(0);
+  logBuffer.push(`[${t}ms] ${msg}`);
+  if(logBuffer.length > LOG_MAX) logBuffer.shift();
+}
+
+// catch any uncaught JS errors into the same log, so a "nothing responds"
+// report can reveal a real exception instead of just silence
+window.addEventListener('error', (e) => {
+  log(`JS ERROR: ${e.message} at ${e.filename}:${e.lineno}:${e.colno}`);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log(`UNHANDLED REJECTION: ${e.reason}`);
+});
+
+// Tracks the most recent column actually under the pointer while a gesture
+// is active. Needed because a fast flick's pointerup can land outside any
+// column (finger lifts past the edge mid-motion) even though it was
+// clearly dragging over a real column a moment before release —
+// elementFromPoint at release time alone misses that. Document-level (not
+// per-column) so it still catches the pointer crossing gaps/board edges.
+document.addEventListener('pointermove', (e) => {
+  if(pendingGestureSource === null) return; // no gesture in progress, ignore
+  const target = document.elementFromPoint(e.clientX, e.clientY);
+  const colEl = target ? target.closest('.column') : null;
+  if(colEl) lastHoverCol = Number(colEl.dataset.index);
+});
+
+// pointerup/pointercancel are bound at the DOCUMENT level rather than on
+// individual .column elements. Reason: pressHighlight's own render() call
+// (triggered from pointerdown) rebuilds every .column element mid-gesture,
+// destroying the original element the pointerdown fired on and replacing
+// it with a fresh one. A listener bound to that original element is gone
+// along with it — on some browsers the pointer was never "handed off" to
+// the new element, so pointerup silently never reaches any listener at
+// all. Binding once at the document level sidesteps this entirely: it
+// doesn't matter how many times the columns get rebuilt mid-press, this
+// listener is never destroyed.
+document.addEventListener('pointerup', (e) => onGestureEnd(e));
+document.addEventListener('pointercancel', () => onGestureEnd(null));
+
+/* ---------- flight animation ----------
+   Each moving block does its own independent 3-phase motion:
+     1) rise straight up until fully above the board-wrap's outer top edge
+        (a fixed clearance from the panel top — same for every block,
+        regardless of which column/row it started in)
+     2) arc sideways to the destination column's x position, peaking
+        ~20% higher than the step-1 clearance height, staying above
+        the panel the whole time
+     3) lower straight down into its landing slot in the destination column
+   Blocks in a run launch staggered STAGGER_MS apart, but each runs its
+   full independent path — no shared timing beyond the launch delay.
+   Real board data/DOM does not change until every block has landed.
+*/
+const STAGGER_MS = 90;
+const FLIGHT_MS = 350;
+const SQUASH_MS = 160; // duration of the land-squash (phase 4), added on top of FLIGHT_MS
+const CLEARANCE = 24; // px above board-wrap's own top edge that step 1 rises to
+const ARC_BUMP_RATIO = 0.20; // extra peak height during arc, as a fraction of CLEARANCE
+
+function flyBlocksToColumn(fromIndex, toIndex, count, colorIdx, onBlockLanded, onDone){
+  log(`FLIGHT start: col${fromIndex}→col${toIndex}, count=${count}, color=${colorIdx}`);
+  const fromColElInitial = columnsContainer.children[fromIndex];
+  const wrapRect = boardWrap.getBoundingClientRect();
+
+  const fromRealBlocks = Array.from(fromColElInitial.querySelectorAll('.block:not(.empty-slot)'));
+  const sourceBlocks = fromRealBlocks.slice(fromRealBlocks.length - count);
+
+  const blockRect = sourceBlocks[0].getBoundingClientRect();
+  const blockW = blockRect.width, blockH = blockRect.height;
+  const gap = 2; // matches .column gap
+
+  // fixed clearance line, same for every block: board-wrap's own top edge
+  // minus CLEARANCE, expressed in board-wrap-relative coordinates
+  const clearanceY = -CLEARANCE;
+  const archPeakY = clearanceY - (CLEARANCE * ARC_BUMP_RATIO);
+
+  // landing slot numbers are computed once, up front, from the destination's
+  // PRE-MOVE length — this must NOT be re-read live, because per-block
+  // renders will change columns[toIndex].length as each block's data lands,
+  // and later-launching blocks would otherwise target the wrong (shifted) slot.
+  const destStartLen = columns[toIndex].length;
+
+  let remaining = count;
+  const checkDone = () => {
+    remaining--;
+    if(remaining <= 0){
+      log(`FLIGHT complete: col${fromIndex}→col${toIndex}, all ${count} block(s) landed`);
+      onDone();
+    }
+  };
+
+  sourceBlocks.forEach((originalSrcBlock, i) => {
+    // i=0 is bottom-most of the moving run, i=count-1 is top-most.
+    // Top block physically leaves first (it's on top of the source pile),
+    // and lands FIRST too — in the lowest available new slot. Each
+    // subsequent block leaves after and stacks on top of the one before it,
+    // so the destination pile visibly builds bottom-up as blocks arrive.
+    const leadOrder = count - 1 - i;
+    const landingIndexFromBottom = destStartLen + leadOrder;
+
+    setTimeout(() => {
+      // re-query the CURRENT top-most real block in the source column live —
+      // don't trust the reference captured at the top of the function, since
+      // an earlier block in this same run may have already triggered a
+      // render() that replaced the entire source column's DOM, leaving that
+      // captured reference detached (getBoundingClientRect would read as 0).
+      const liveFromColEl = columnsContainer.children[fromIndex];
+      const liveRealBlocks = liveFromColEl.querySelectorAll('.block:not(.empty-slot)');
+      const srcBlock = liveRealBlocks[liveRealBlocks.length - 1] || originalSrcBlock;
+
+      const srcRect = srcBlock.getBoundingClientRect();
+      const startX = srcRect.left - wrapRect.left;
+      const startY = srcRect.top - wrapRect.top;
+
+      // pop this block's data out of the source column NOW, at launch time,
+      // not at landing. This is the block that's physically leaving (top of
+      // whatever remains in the source pile) — so removing from the end of
+      // the live array is always correct regardless of how many blocks in
+      // this run have already launched/landed before it.
+      columns[fromIndex].pop();
+      render(); // reflects the now-correct (one shorter) source column —
+                // no opacity hack needed, the real DOM simply won't include
+                // this block anymore since the data doesn't either
+
+      // re-query the destination column fresh: an earlier block's landing
+      // may have already triggered a render() that replaced the element
+      // captured at the top of this function, making that reference stale
+      const toColEl = columnsContainer.children[toIndex];
+      const toColRect = toColEl.getBoundingClientRect();
+      // measure endX from an existing real block in the destination column (or the
+      // source block's own width as fallback) so it lands aligned with actual block
+      // edges, not the column container's padded/bordered edge
+      const toRealBlock = toColEl.querySelector('.block:not(.empty-slot)');
+      const endX = toRealBlock
+        ? (toRealBlock.getBoundingClientRect().left - wrapRect.left)
+        : (toColRect.left - wrapRect.left + 6); // 4px padding + 2px border fallback
+      const endY = (toColRect.bottom - wrapRect.top) - ((landingIndexFromBottom + 1) * (blockH + gap)) + gap;
+
+      log(`  block ${i+1}/${count} launch: start(${startX.toFixed(0)},${startY.toFixed(0)}) → end(${endX.toFixed(0)},${endY.toFixed(0)})`);
+
+      const flyer = document.createElement('div');
+      flyer.className = 'block flying';
+      flyer.style.width = blockW + 'px';
+      flyer.style.height = blockH + 'px';
+      flyer.style.background = COLORS[colorIdx];
+      boardWrap.appendChild(flyer);
+
+      const anim = flyer.animate([
+        // phase 0: at rest, normal scale
+        { transform: `translate(${startX}px, ${startY}px) scale(0.45, 1.82)`,            offset: 0 },        // entrance: already stretched
+        // phase 1 (rise): maintain stretch while rising
+        { transform: `translate(${startX}px, ${clearanceY}px) scale(0.45, 1.82)`,       offset: 0.3 },
+        // phase 2 (arc): regulate back to normal scale at the peak
+        { transform: `translate(${endX}px, ${archPeakY}px) scale(1, 1)`,                offset: 0.6 },
+        // phase 3 (fall): stretch again — 55% narrower, 82% taller, falling into place
+        { transform: `translate(${endX}px, ${clearanceY}px) scale(0.45, 1.82)`,         offset: 0.8 },
+        { transform: `translate(${endX}px, ${endY}px) scale(0.45, 1.82)`,               offset: 1 }
+      ], { duration: FLIGHT_MS, easing: 'ease-out', fill: 'forwards' });
+
+      // log when phase 3 (fall) begins, matching the 0.8 offset above
+      setTimeout(() => log(`  block ${i+1}/${count} phase3 (fall) start`), FLIGHT_MS * 0.8);
+
+      anim.onfinish = () => {
+        log(`  block ${i+1}/${count} phase3 end, starting land-squash`);
+        // Sound fires HERE, at the true moment of impact — right as the
+        // fall ends and the squash begins — not in squash.onfinish below.
+        // Firing it at squash-end meant the sound played a full
+        // SQUASH_MS after the block visually hit, which read as
+        // sluggish/delayed. leadOrder is this block's fixed position in
+        // the landing sequence (0 = first to land this move).
+        playLandingSound(leadOrder, count === 1);
+
+        // phase 4: land-squash — squish down 60% on Y, widen 60% on X, then
+        // unsquish back to normal. This is pure "filling" (visual only),
+        // sandwiched safely between the existing start/complete cues —
+        // the actual data swap doesn't happen until THIS finishes too.
+        const squash = flyer.animate([
+          { transform: `translate(${endX}px, ${endY}px) scale(0.45, 1.82)`,  offset: 0 },    // arrives already stretched from the fall
+          { transform: `translate(${endX}px, ${endY}px) scale(1.6, 0.4)`,    offset: 0.4 },  // 4A: squash down, widen out
+          { transform: `translate(${endX}px, ${endY}px) scale(1, 1)`,        offset: 1 }     // 4B: unsquish back to normal
+        ], { duration: SQUASH_MS, easing: 'ease-out', fill: 'forwards' });
+
+        squash.onfinish = () => {
+          log(`  block ${i+1}/${count} landed at (${endX.toFixed(0)},${endY.toFixed(0)})`);
+          // 4C: end of flight animation — swap immediately: remove this flyer
+          // and hand off to onBlockLanded, which moves this one block's data
+          // and re-renders columns-container. Other flyers (siblings on
+          // board-wrap, untouched by that render) keep animating uninterrupted.
+          flyer.remove();
+          onBlockLanded();
+          checkDone();
+        };
+      };
+    }, leadOrder * STAGGER_MS);
+  });
+}
+
+function onGestureEnd(e){
+  // called on BOTH pointerup and pointercancel. Always ends the visual
+  // press-hold regardless of what happens next.
+  log(`input: ${e === null ? 'pointercancel' : 'pointerup'} (startCol=${pendingGestureSource})`);
+  pressHighlight = null;
+  const startCol = pendingGestureSource;
+  const hoverCol = lastHoverCol;
+  pendingGestureSource = null;
+  lastHoverCol = null;
+
+  if(e === null) { log('  → aborted, no action (pointercancel)'); render(); return; }
+
+  render();
+  if(animating){ log('  → ignored, animating'); return; }
+  if(startCol === null){ log('  → ignored, no startCol'); return; }
+
+  // find whichever column is actually under the pointer at release —
+  // for a fast tap this is the same column as startCol; for a drag it's
+  // wherever the finger/cursor ended up. Either way, hand off to the same
+  // single function: it doesn't need to know or care which kind of
+  // gesture this was.
+  const target = document.elementFromPoint(e.clientX, e.clientY);
+  const colEl = target ? target.closest('.column') : null;
+  // Fast flicks can release with the pointer already past the board edge —
+  // elementFromPoint finds nothing there. Fall back to the last column we
+  // saw the pointer actually over during this same gesture (tracked via
+  // pointermove) instead of treating it as "released outside, no action".
+  const endCol = colEl ? Number(colEl.dataset.index) : hoverCol;
+  if(endCol === null){ log('  → ignored, no endCol resolvable'); return; }
+  log(`  → resolved startCol=${startCol} endCol=${endCol}`);
+
+  attemptSelectOrMove(startCol, endCol);
+}
+
+// The ONE function that contains all real selection/move game logic.
+// Called with (startCol, endCol) — the column a gesture started on and
+// the column it ended on. A tap and a drag both funnel through here
+// identically; startCol only matters when nothing is currently selected
+// (establishing what THIS gesture picks up), endCol is what everything
+// else (deselect-toggle, move-destination) is evaluated against.
+function attemptSelectOrMove(startCol, endCol){
+  if(animating) return;
+
+  if(startCol === endCol){
+    // TAP: press and release on the same column. Use the existing
+    // select/deselect toggle against whatever is currently selected.
+    if(selected === null){
+      if(columns[startCol].length === 0) return; // nothing to pick up
+      selected = startCol;
+      render();
+      return;
+    }
+    if(selected === startCol){
+      selected = null; // deselect
+      render();
+      return;
+    }
+    // selected holds some OTHER column from a prior gesture, and this tap
+    // landed on a different one — attempt selected -> startCol as a move.
+    attemptMove(selected, startCol);
+    return;
+  }
+
+  // DRAG: press and release on different columns within ONE gesture.
+  // This always attempts startCol -> endCol directly as the move, using
+  // wherever THIS gesture began as the source — regardless of whatever
+  // `selected` happened to be left over from some earlier, separate
+  // interaction. If startCol has nothing to pick up or the move is
+  // illegal, attemptMove's own fallback handles reselecting endCol.
+  attemptMove(startCol, endCol);
+}
+
+// Shared move-attempt core used by BOTH the tap and drag paths above.
+// fromCol = source column, toCol = the column the gesture ended on.
+function attemptMove(fromCol, toCol){
+  if(columns[fromCol].length === 0){
+    selected = null;
+    render();
+    return;
+  }
+
+  const srcArr = columns[fromCol];
+  const dstArr = columns[toCol];
+  const moving = srcArr[srcArr.length - 1];
+
+  const destOk = dstArr.length < COLUMN_CAPACITY &&
+    (dstArr.length === 0 || dstArr[dstArr.length - 1] === moving);
+
+  if(destOk){
+    // count the same-color run sitting on top of the source column
+    let runSize = 1;
+    while(runSize < srcArr.length && srcArr[srcArr.length - 1 - runSize] === moving) runSize++;
+
+    const room = COLUMN_CAPACITY - dstArr.length;
+    const moveCount_ = Math.min(runSize, room); // partial run if destination can't fit it all
+
+    const fromIndex = fromCol;
+    const toIndex = toCol;
+    selected = null;
+    animating = true;
+    render(); // clear selection highlight; data hasn't moved yet, flight happens first
+
+    flyBlocksToColumn(fromIndex, toIndex, moveCount_, moving,
+      () => {
+        // fires once PER landed block: the source pop already happened at
+        // LAUNCH time (inside flyBlocksToColumn, so mid-run renders show
+        // the correct shrinking source column). This only pushes the
+        // arriving block into the destination and re-renders.
+        columns[toIndex].push(moving);
+        render();
+      },
+      () => {
+        // fires once the WHOLE run has landed
+        moveCount++;
+        animating = false;
+        resetIdleHintTimer(); // a real move just completed — restart the 45s idle countdown
+        // Check the DESTINATION column specifically for "just became a
+        // complete, single-color, full stack" — a move can only ever
+        // complete the column it just landed in, so no need to scan all
+        // columns. This is independent of isSolved() below: a column
+        // completing and the whole board completing can legitimately
+        // happen on the same move (e.g. the last column finishes and
+        // that also happens to be the final column overall) — both
+        // sounds are allowed to play together in that case.
+        if(isColumnComplete(toIndex)) {
+          playColumnCompleteJingle();
+          playColumnCompleteShine(toIndex);
+        }
+        if(isSolved()) onBoardComplete();
+      }
+    );
+  } else {
+    // illegal move — just reselect the destination column if it has blocks, else clear
+    selected = columns[toCol].length > 0 ? toCol : null;
+    render();
+  }
+}
+
+/* ---------- cue signals ----------
+   "bread, not filling": onBoardComplete fires the instant the board is
+   sorted. onBoardCompleteSettled fires BREATH_MS later — that's the one
+   that actually triggers the win screen. Anything else that should react
+   to "board just finished" (sound, particles, etc.) hooks onBoardComplete;
+   anything that should wait for the pause to finish hooks onBoardCompleteSettled.
+*/
+const BREATH_MS = 700; // total wait before the win screen pops up (was 800 originally,
+                        // then bumped to 1100 for "+300ms"; latest instruction set the
+                        // TOTAL wait to 700ms directly, replacing both prior values)
+
+function onBoardComplete(){
+  setTimeout(onBoardCompleteSettled, BREATH_MS);
+}
+
+function onBoardCompleteSettled(){
+  onWin();
+}
+
+/* ---------- win screen ---------- */
+/* ---------- victory fireworks (Victory Screen pattern) ----------
+   One dotted-ring sprite per firework: rises, decelerates, settles
+   slightly, fades — no real particle system, just one SVG element
+   animated with WAAPI. Positioned relative to boardWrap, same overlay
+   pattern as flying blocks and the column-complete shine (boardWrap is
+   never rebuilt by render(), so effects anchored to it survive safely
+   regardless of what's happening in columnsContainer underneath).
+*/
+function spawnFirework(container, x, y, color){
+  const size = 90, dots = 12;
+  const wrapper = document.createElement('div');
+  wrapper.style.position = 'absolute';
+  wrapper.style.left = x+'px';
+  wrapper.style.top = y+'px';
+  wrapper.style.width = size+'px';
+  wrapper.style.height = size+'px';
+  wrapper.style.pointerEvents = 'none';
+  wrapper.style.zIndex = '110';
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  const cx = size/2, cy = size/2, r = size/2-6;
+  for(let i=0;i<dots;i++){
+    const angle = (i/dots)*Math.PI*2;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx', cx + r*Math.cos(angle));
+    circle.setAttribute('cy', cy + r*Math.sin(angle));
+    circle.setAttribute('r', 3);
+    circle.setAttribute('fill', color);
+    svg.appendChild(circle);
+  }
+  wrapper.appendChild(svg);
+  container.appendChild(wrapper);
+
+  const t = (y2,s)=> `translate(-50%,-50%) translateY(${y2}px) scale(${s})`;
+  const anim = wrapper.animate([
+    { transform:t(10,0.1),  opacity:1, offset:0 },
+    { transform:t(-45,0.7), opacity:1, offset:0.5 },
+    { transform:t(-65,1),   opacity:1, offset:0.75 },
+    { transform:t(-40,1),   opacity:0, offset:1 }
+  ], { duration: 1400, easing:'ease-out' });
+  anim.onfinish = ()=> wrapper.remove();
+}
+
+let fireworksInterval = null;
+
+function shootFirework(){
+  const rect = boardWrap.getBoundingClientRect();
+  const colors = COLORS; // this game's existing block color palette
+  const x = 30 + Math.random()*(rect.width-60);
+  const y = rect.height*0.3 + Math.random()*(rect.height*0.35);
+  const color = colors[Math.floor(Math.random()*colors.length)];
+  spawnFirework(boardWrap, x, y, color);
+}
+
+function launchFireworks(){
+  for(let i=0;i<6;i++){ setTimeout(shootFirework, i*180); } // quick initial burst of 6
+  clearInterval(fireworksInterval);
+  fireworksInterval = setInterval(shootFirework, 1000);     // then one every second
+}
+
+function stopFireworks(){
+  clearInterval(fireworksInterval);
+  fireworksInterval = null;
+}
+
+function onWin(){
+  document.getElementById('win-moves').textContent = `Solved in ${moveCount} moves`;
+  document.getElementById('overlay-win').classList.add('show');
+  playVictoryJingle();
+  stopIdleHintTimer(); // game's over — no idle nudges should appear on the win screen
+  launchFireworks();
+}
+function closeWin(){
+  document.getElementById('overlay-win').classList.remove('show');
+  // IMPORTANT (per Victory Screen pattern): stopFireworks() must be
+  // called on every "leave this screen" path — Restart, Play Again, and
+  // any future one — or the setInterval in launchFireworks() keeps
+  // firing forever in the background. Putting it here, inside
+  // closeWin() (which startLevel() already calls unconditionally),
+  // covers every current and future exit path in one place rather than
+  // relying on each caller to remember it individually.
+  stopFireworks();
+}
+
+/* ---------- restart ---------- */
+function startLevel(){
+  moveCount = 0;
+  selected = null;
+  animating = false;
+  closeWin();
+  generateBoard();
+  render();
+  logBuffer = [];
+  log('New level started');
+  resetIdleHintTimer(); // fresh level, fresh 45s countdown
+}
+
+/* ---------- debug solve (dev tool, not exposed to players) ---------- */
+function debugSolve(){
+  // brute-force: keep making any legal move that reduces mixed columns, greedy.
+  // not guaranteed optimal, just a fast dev-testing shortcut.
+  let guard = 0;
+  while(!isSolved() && guard < 500){
+    guard++;
+    let moved = false;
+    for(let i = 0; i < columns.length && !moved; i++){
+      if(columns[i].length === 0) continue;
+      const top = columns[i][columns[i].length - 1];
+      for(let j = 0; j < columns.length; j++){
+        if(i === j) continue;
+        const toCol = columns[j];
+        if(toCol.length < COLUMN_CAPACITY && (toCol.length === 0 || toCol[toCol.length-1] === top)){
+          // avoid moving to another empty column if source is single-type already fine
+          if(toCol.length === 0 && columns[i].every(v => v === top)) continue;
+          toCol.push(columns[i].pop());
+          moveCount++;
+          moved = true;
+          break;
+        }
+      }
+    }
+    if(!moved) break;
+  }
+  render();
+  if(isSolved()) onBoardComplete();
+}
+
+/* ---------- logs report ---------- */
+function buildReport(){
+  const lines = [];
+  lines.push('=== SORT STACK DEBUG REPORT ===');
+  lines.push(`Generated: ${new Date().toISOString()}`);
+  lines.push(`Moves: ${moveCount}`);
+  lines.push(`Columns: ${COLUMN_COUNT}, Capacity: ${COLUMN_CAPACITY}, Colors: ${COLOR_COUNT}`);
+  lines.push(`Selected column: ${selected === null ? 'none' : selected}`);
+  lines.push(`Animating: ${animating}`);
+  lines.push('');
+  lines.push('--- Board state (bottom → top per column) ---');
+  columns.forEach((col, ci) => {
+    lines.push(`Col ${ci}: [${col.join(',')}]  (${col.length}/${COLUMN_CAPACITY})`);
+  });
+  lines.push('');
+  lines.push(`--- Event log (last ${logBuffer.length}) ---`);
+  lines.push(...logBuffer);
+  return lines.join('\n');
+}
+
+function copyReport(){
+  const report = buildReport();
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(report).then(() => {
+      log('Report copied to clipboard');
+    }).catch(() => {
+      // clipboard permission can fail silently on some mobile browsers;
+      // fall back to a visible textarea the user can manually copy from
+      showReportFallback(report);
+    });
+  } else {
+    showReportFallback(report);
+  }
+}
+
+function showReportFallback(report){
+  let ta = document.getElementById('report-fallback');
+  if(!ta){
+    ta = document.createElement('textarea');
+    ta.id = 'report-fallback';
+    ta.style.cssText = 'position:fixed; inset:10% 5%; z-index:400; width:90%; height:80%; font-size:11px; background:#111; color:#0f0; padding:10px; border-radius:8px;';
+    document.body.appendChild(ta);
+    // close on escape key
+    ta.addEventListener('keydown', (e) => {
+      if(e.key === 'Escape') ta.style.display = 'none';
+    });
+  }
+  ta.value = report;
+  ta.style.display = 'block';
+  ta.focus();
+  ta.select();
+}
+
+
+document.getElementById('btn-restart-hud').addEventListener('click', startLevel);
+document.getElementById('btn-next').addEventListener('click', startLevel);
+document.getElementById('btn-debug-restart').addEventListener('click', startLevel);
+document.getElementById('btn-debug-solve').addEventListener('click', debugSolve);
+document.getElementById('btn-logs').addEventListener('click', copyReport);
+
+document.getElementById('btn-mute').addEventListener('click', ()=>{
+  setMuted(!isMuted);
+});
+setMuted(isMuted); // sync the button's icon/label to whatever was loaded from localStorage
+                    // (or the try/catch fallback) before any click ever happens
+
+document.getElementById('btn-debug-toggle').addEventListener('click', ()=>{
+  const panel = document.getElementById('debug-panel');
+  panel.classList.toggle('show');
+  // also close logs window when toggling debug, for mobile convenience
+  const ta = document.getElementById('report-fallback');
+  if(ta) ta.style.display = 'none';
+});
+
+window.addEventListener('resize', updateBoardScale);
+updateBoardScale(); // initial sizing pass, before startLevel() so the first render
+                     // already has the correct --board-max-w set
+
+startLevel();
+</script>
+</body>
+</html>
