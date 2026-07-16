@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Casual Games</title>
+<style>
+  :root{
+    --bg:#0f1115;
+    --card:#1b1e26;
+    --card-hover:#232733;
+    --text:#eaeaea;
+    --sub:#9a9fae;
+    --accent:#3a8bff;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    padding:24px 16px 60px;
+  }
+  h1{
+    text-align:center;
+    font-size:22px;
+    letter-spacing:0.5px;
+    margin:8px 0 28px;
+  }
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+    gap:16px;
+    max-width:720px;
+    margin:0 auto;
+  }
+  .card{
+    display:block;
+    background:var(--card);
+    border-radius:14px;
+    overflow:hidden;
+    text-decoration:none;
+    color:var(--text);
+    border:1px solid #2a2e3a;
+    transition:transform 0.15s ease, background 0.15s ease;
+  }
+  .card:active{
+    transform:scale(0.96);
+    background:var(--card-hover);
+  }
+  .thumb{
+    width:100%;
+    aspect-ratio:4/3;
+    background:var(--placeholder-color, linear-gradient(135deg,#2a2e3a,#1b1e26));
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:28px;
+    color:var(--sub);
+  }
+  .thumb img{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    display:block;
+  }
+  .label{
+    padding:10px 12px 12px;
+  }
+  .label .title{
+    font-size:14px;
+    font-weight:700;
+    line-height:1.25;
+  }
+  .label .desc{
+    font-size:11px;
+    color:var(--sub);
+    margin-top:3px;
+    line-height:1.3;
+  }
+</style>
+</head>
+<body>
+
+<h1>🎮 Casual Games</h1>
+<div class="grid" id="grid"></div>
+
+<script>
+  // ---- ADD NEW GAMES HERE ----
+  // path: folder containing that game's index.html
+  // thumb: optional image path; omit or leave "" to use the placeholder
+  // color: optional placeholder background if no thumb (any CSS color/gradient)
+  // emoji: optional fallback glyph shown on the placeholder
+  const GAMES = [
+    { title: "Sort Stack",  path: "sort-stack/",  thumb: "", color: "linear-gradient(135deg,#ff6b6b,#c0392b)", emoji: "🧱" },
+    { title: "Slide Match", path: "slide-match/", thumb: "", color: "linear-gradient(135deg,#8e6bff,#5b3fd9)", emoji: "🧩" },
+  ];
+  // -----------------------------
+
+  const grid = document.getElementById('grid');
+
+  GAMES.forEach(game => {
+    const a = document.createElement('a');
+    a.className = 'card';
+    a.href = game.path;
+
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    if(game.color) thumb.style.setProperty('--placeholder-color', game.color);
+
+    if(game.thumb){
+      const img = document.createElement('img');
+      img.src = game.thumb;
+      img.alt = game.title;
+      // if the real image 404s, fall back to the emoji placeholder
+      img.onerror = () => { img.remove(); thumb.textContent = game.emoji || '🎮'; };
+      thumb.appendChild(img);
+    } else {
+      thumb.textContent = game.emoji || '🎮';
+    }
+
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.innerHTML = `<div class="title">${game.title}</div>` +
+      (game.desc ? `<div class="desc">${game.desc}</div>` : '');
+
+    a.appendChild(thumb);
+    a.appendChild(label);
+    grid.appendChild(a);
+  });
+</script>
+
+</body>
+</html>
