@@ -1,237 +1,6 @@
 <!DOCTYPE html>
 <!--
   Slide Match - Version Log
-  v2.0 - STABLE BASELINE. Push-chain mechanic, per-tile cross-axis matching,
-         shuffle-remaining (free once/level then costs a life), Logs debug
-         button, watchdog against stuck animation locks, all known tileMap/
-         board aliasing bugs fixed.
-  v2.1 - Lives persist across levels. Heart icons. Red flash + board wiggle
-         on life loss.
-  v3.0 - Fireworks on level clear (6 then 1/sec), auto-reshuffle
-         with spin/blink animation when truly stuck, cycling Hint button,
-         unified rule: ANY non-matching slide reverts + costs a life (no
-         more free wall-stops), mid-drag matching (fires the instant a
-         match is reached, not just on release), full-screen win/lose
-         overlays, Highest Level tracking, tile color contrast fix (7 vs 3).
-         If future changes go sideways, v2.0 is still the safe fallback.
-  v3.1 - Match animation reworked: tiles grow, squish to a combined width,
-         and shrink away together instead of the old uniform bloat-and-pop.
-  v3.2 - Grow reduced to 10%. Squish no longer overlaps the two tiles —
-         each pulls back a quarter-tile-width so they end up flush
-         side-by-side before shrinking away.
-  v3.3 - Web line shrinks from center, gets thicker on recoil then thins
-         during the yank. Tile shrink converges to a shared vanish point.
-  v3.4 - Attempted center-shrink fix for the web line broke vertical matches
-         (line rendered off to the side) due to CSS transform composition
-         order being genuinely ambiguous when combining translate+rotate+scale.
-  v3.5 - Web line rebuilt as static-rotation wrapper + animated bar child,
-         fixing the vertical-match positioning bug for good.
-  v3.6 - Line thickness 4px->2px, vanishes at impact. Added impact ripple
-         wobble after the merge.
-  v3.7 - Recoil +10%, wobble scales around the merged tile's shared center.
-  v3.8 - Wobble intensity +50%. Line thickness flipped: thin latch, thick yank.
-  v3.9 - Fixed regulate-step bug (was 2 tile-widths, now correctly 1).
-         Sped up 20%.
-  v4.0 - Dropped the squash step. Sequence: squish -> regulate -> shrink.
-  v4.1 - Squish now actually moves both axes (40% shrink/grow).
-  v4.2 - Added cartoon smear during yank, calmed squish 20%.
-  v4.3 - Recoil fixed at 50% tile size, no longer distance-scaled.
-  v4.4 - Line 2->9. Shockwave ring added at impact, colored to the match.
-  v4.5 - Shockwave moved to 0.65 (wrong direction, still too late) and
-         sped to 0.3s.
-  v4.6 - Shockwave color bug fixed (read from stale board array). Timing
-         moved to 0.45.
-  v4.7 - Shockwave grown 2.5x, immediately too big.
-  v4.8 - Shockwave rebuilt as dotted ring, end scale trimmed.
-  v4.9 - Shockwave dots shrunk 50%.
-  v5.0 - Logs hidden but clickable, board restored to full size.
-  v5.1 - Added color-scheme:dark meta tag to fix browser auto-dark repainting.
-  v5.2 - Title screen wired in fully (first load, tab-return, post-loss).
-  v5.3 - Desktop breakpoint added for larger fine-pointer screens.
-  v5.4 - First pass at bomb tiles: 2 max, dark grey, red pulse, countdown.
-  v5.5 - Urgent pulse state, grow/blink/burst sequence, moves raised to 15.
-  v5.6 - Both bombs detonate together, 50-circle burst per bomb.
-  v5.7 - Fireball circles solid, growing 1%->200%. Dripping V rain on
-         Game Over. Bomb countdown temporarily 5 for debugging.
-  v5.8 - Fixed bomb double-tick bug, removed zigzag, moved V-drips behind text.
-  v5.9 - Logs unhidden, board re-shrunk for preview.
-  v6.0 - Fixed the actual bombExploding-stuck bug (reset per level + catch).
-  v6.1 - Bomb countdown is now a heuristic, not a fixed number:
-         counts non-empty tiles directly between the two bomb cells (or
-         the cheaper of two L-shaped routes if they don't share a row/
-         column), +1 grace move. NOT a real solver — doesn't account for
-         chain-pushes, existing matches elsewhere, or actual move
-         sequencing. Scoped deliberately narrow per request: only the
-         path between the two bombs matters, not the whole board.
-  v6.2 (current) - Grace bumped 1->3 (1 was brutal). Added a "Bomb Path"
-         debug button: highlights the current bomb pair plus whatever
-         obstacle tiles the countdown heuristic is actually counting,
-         and logs the exact path — so you can eyeball whether a given
-         countdown is fair instead of guessing.
-  v6.3 (current) - Grace padded again, 3->6 total.
-  v6.4 (current) - Grace walked back to +1 (6 made it trivial).
-  v6.5 (current) - Drag now cancels if released within 15% of the start
-         (was always committing fully once the axis locked, regardless of
-         where you let go). Bomb Path now logs the LIVE recomputed
-         obstacle count alongside the bomb's actual current countdown and
-         a pace verdict (ahead/on-pace/behind), instead of showing the
-         obstacle count in isolation with nothing to compare it against.
-  v6.6 (current) - Bomb Path fixed: was animating the `outline` shorthand
-         via WAAPI, which browsers handle inconsistently — switched to
-         outlineWidth directly. Also now highlights each obstacle's actual
-         match partner, not just the obstacle itself, so it shows what
-         move clears it instead of just where it is.
-  v6.7 (current) - Grace +1 -> +2. We're basically tuning by vibes at this point.
-  v6.8 (current) - Real bug fixed: bombs ticked at move-START, meaning a
-         move that WOULD clear the bomb pair still decremented (and could
-         detonate) before the match itself was ever evaluated. Moved the
-         tick to move-END instead — by then, a cleared bomb is already
-         gone from tileMap, so it simply doesn't get ticked. No more
-         dying to the exact move that saves you.
-  v6.9 (current) - Shuffle (manual and auto) now recalculates bomb
-         countdown from the new positions using the same heuristic
-         (obstacles + 2 grace), instead of silently reusing whatever
-         stale value was set back at level start.
-  v7.0 (current) - Bomb explosion could hang indefinitely if the grow
-         animation's .finished promise neither resolved NOR rejected
-         (watchdog would eventually reset animating, but not bombExploding
-         or the game-over screen — silent soft-lock). Added a 2s hard
-         timeout race so it always forces the outcome either way now.
-  v7.1 (current) - Grace +2 -> +3 (multiple "1 move short" reports).
-  v7.2 (current) - The v7.0 hang bug apparently still occurred (my internal
-         2s timeout never fired/logged before the 4s watchdog did — can't
-         fully explain why from code alone). Added a backstop: the
-         watchdog now also resets bombExploding, so a hung bomb sequence
-         at least retries on the next tick instead of being permanently
-         locked out. Not a real fix for the unknown root cause, but the
-         game can no longer get stuck forever because of it.
-  v7.3 (current) - Grace +3 -> +4.
-  v7.3 (current) - Grace +4 -> +5.
-  v7.4 (current) - Added a tiny debug "Restart" button, fixed bottom-left,
-         calls startLevel() to reroll a fresh board at the same level/lives
-         — for fast bomb-tuning speedruns without going through the title
-         screen or losing on purpose.
-  v7.4 (current) - Added a small debug "Restart" button, fixed bottom-left.
-         Just calls startLevel() — fresh board, same level, same lives.
-         For fast retesting without going through a real game-over.
-  v7.5 (current) - Successfully defusing bombs (normal match, not a real
-         detonation) now puffs 8 grey smoke circles that drift and fizzle
-         out over 0.8s instead of the usual colored shockwave.
-  v7.6 (current) - Real bug: isBombMatch read board[r][c], which is
-         already nulled by finalizeChainShift before doMatch runs on
-         push-based matches — so smoke only ever fired for tap matches.
-         Reads off the element's rendered color now instead, same fix
-         pattern as the earlier shockwave-color bug.
-  v7.7 (current) - Smoke was replacing the shockwave instead of adding to
-         it (if/else instead of both). Now both fire together for bomb
-         matches. Smoke sizing was already independent of tile size, no
-         change needed there.
-  v7.8 (current) - THE actual smoke bug: comparing mover.style.background
-         to a literal hex string, which browsers almost certainly
-         normalize on read-back (e.g. to rgb()), making the check always
-         false. Switched to checking the .bomb-tile class instead, same
-         reliable method used everywhere else. Smoke duration bumped to
-         a full 1s per request.
-  v7.9 (current) - Congrats on level 8. Added a cartoon fuse to bomb
-         tiles: a brown wick sticking out the top-right corner with a
-         spinning "*" spark at the tip. Had to move the countdown number
-         into its own span first — tickBombs was setting el.textContent
-         directly, which would've wiped out the wick/spark every single
-         tick.
-  v8.0 (current) - Spark nudged ~10% right to sit at the wick's tip.
-         Wick fattened (4px->6px) and lightened 20%.
-  v8.1 (current) - Spark nudged another 20% right. Smoke puffs now stagger
-         over 0.6s (was ~150ms) so it keeps emitting instead of one burst.
-  v9.0 (current) - Hard Mode system: bombs now only spawn on every 3rd
-         level (was every level). Clearing 3 levels in a row with zero
-         life loss earns a Bomb Diffuser — a 💣 button, bottom-left,
-         hollow/grey when unavailable, blue-glowing when charged. Using
-         it instantly clears both current bomb tiles (they only match
-         each other, so removing just one would strand the other
-         forever) with a smoke-puff effect, no matching required.
-  v9.1 (current) - Hard Mode every 4th level instead of 3rd (matches the
-         3-level diffuser streak better — every 3rd meant you'd basically
-         always have one waiting).
-  v9.2 (current) - Dragging a tile straight into an adjacent same-value
-         tile now matches that specific pair directly, instead of falling
-         into the push-chain logic (which would've treated two touching
-         same-number tiles as one rigid block to shove, not a match).
-         Lets you pick which tile in a cluster (e.g. a 2x2 block of the
-         same number) to pair with, instead of always getting whichever
-         one tap's fixed up/down/left/right scan order happens to find
-         first.
-  v9.3 (current) - Reworked the diffuser into a Tile Killer: 🔫 icon, tap
-         to arm (pulses red while armed), then tap any tile to kill it
-         plus whichever same-value tile is physically nearest (straight
-         Euclidean distance, no line-of-sight required — it's a forced
-         kill, not a real match). Open-ended for future obstacles, not
-         bomb-specific anymore. Same 3-perfect-levels earn condition.
-         Also nudged the spark further right again.
-  v9.4 (current) - Hard levels now open with a red "Hard Level" banner —
-         grows in, holds 1s, shrinks out. Gun button resized to a real
-         feature sitting next to Hint (was a tiny corner icon), Shuffle
-         stays the small debug button in the corner.
-  v9.5 (current) - Gun button now shows a 🔒 + countdown badge (levels
-         until unlock, 3 down to 0) while locked, hidden once a charge is
-         available. A mistake pulses the lock red and resets the
-         countdown immediately (not waiting for level end anymore).
-  v9.6 (current) - Found the actual Restart bug: there were literally TWO
-         #btn-debug-restart buttons in the markup (one malformed, jammed
-         inline before the HUD div) plus a duplicate CSS block and a
-         duplicate event listener — classic leftover from a bad edit.
-         Cleaned up to one of each. Removed the Bomb Path and manual
-         Shuffle buttons/handlers (auto-reshuffle still works fine on its
-         own). Added a "Solve" debug button next to Restart: clears ~90%
-         of remaining tiles instantly in matching pairs, for fast testing.
-  v9.7 (current) - Tile Killer presentation overhaul: arming now outlines
-         every tile blue; gun button is dark blue by default, pale blue
-         (pulsing) while armed; cancel by tapping the gun again. Firing
-         clears the outlines, then a laser beam shoots from the gun to
-         tile A, pauses 0.2s, then to tile B, before the actual kill
-         plays out. Lock icon and countdown number both enlarged.
-  v9.8 (current) - Beam 40% thicker. Shot tiles violently wiggle (bigger
-         rotation + scale punch) as each laser lands. Gun button now stays
-         visually "armed" for an extra 0.8s after firing completes before
-         dimming to its real state.
-  v9.9 (current) - Added "Tap a tile to blast away" instruction text below
-         the action bar, shown while the gun's armed. Spark nudged right
-         again (running total of nudges is getting a little silly).
-  v10.0 (current) - Hard Level banner now has a dark dimming backdrop
-         behind it, fading in/out in sync with the text.
-  v10.1 (current) - Bomb numbers now red, pulsing scale+white flash on
-         every countdown tick. Regular tile numbers at 50% opacity —
-         readability tradeoff acknowledged, done anyway per request.
-  v10.2 (current) - Consolidated all debug tools under one "Debug" toggle
-         button (bottom-left): Restart, Solve, Logs (moved out of the top
-         HUD), and a new "Preview Rescale" toggle that switches between
-         full-size and the 20%-shrunk preview-window sizing — off by
-         default, so the game runs full-size unless you explicitly turn
-         it on.
-  v10.3 (current) - Added a round pale-purple "?" button next to Hint.
-         Opens a native HTML/CSS tutorial diagram (not an embedded image —
-         built from divs/grid, same technique as the title screen's demo
-         tiles) matching the mockup: row/column match example on top, a
-         push-through-obstacles example below with an arrow. Tap anywhere
-         to close.
-  v10.4 (current) - Real bug (not a rescaling issue): the tutorial's
-         connecting lines used pixel offsets copied straight from the
-         padded Python mockup instead of recalculated for the padding-
-         free HTML grid, so the vertical line ran between the two 2s
-         instead of connecting the two 4s. Fixed the actual coordinates.
-         Also added a scale-down safety net for genuinely narrow screens.
-  v10.5 (current) - Help button moved to the far-left corner of the
-         action bar (was crammed in with Hint/Gun). Debug button darkened
-         near-invisible — it's yours, not the family's.
-  v10.6 (current) - Debug button now hollow (transparent fill, outline+text only).
-  v10.7 (current) - Real bug: `animating` never got reset to false after a
-         bomb explosion finished (neither success nor error path cleared
-         it). Fixed both. Honest caveat: I can't 100% confirm this is the
-         exact mechanism behind the reported "explodes again on next
-         attempt" bug, but it's a genuine leak regardless and the most
-         plausible suspect — watch for it recurring and send logs if so.
-  v10.8 (current) - Added italic, very pale blue "Clear the Bomb Tiles
-         before they countdown to 0!" text below the action bar, shown
-         only on Hard Mode levels.
   v10.9 (current) - Cleanup pass: removed 5 fully dead functions
          (showBombPath, getObstacleCellsBetween — Bomb Path button was
          removed from the UI a while back but the code never got cleaned
@@ -262,6 +31,14 @@
          entirely — this replaces both. Preview Rescale toggle untouched,
          still works via !important override. Runs on load, resize, and
          orientation change, rAF-batched.
+  v11.3 (current) - UI polish pass: shrunk hint/blaster buttons 40%,
+         centered gun-lock icon on blaster button, info button moved to
+         top-right above board (smaller circle), both info/home buttons
+         now hollow purple outline (#645394) matching standard layout.
+         Tightened spacing: action-row margin 14px→2px above, home button
+         margin 8px→2px below. Removed blank-line gap under title so
+         help-row sits flush. Home button centered under action buttons.
+         Implements the new Standard Game Layout.
 -->
 <html lang="en">
 <head>
@@ -297,7 +74,7 @@
     color:#3a8bff;
     text-shadow:0 2px 0 #163a73;
     letter-spacing:1px;
-    margin-bottom:20px;
+    margin-bottom:0;
   }
   #hud{
     width:var(--board-max-w, 420px); max-width:none;
@@ -317,6 +94,8 @@
     cursor:pointer;
     filter: grayscale(1) brightness(0.6);
     opacity:0.5;
+    transform:scale(0.6);
+    transform-origin:center;
   }
   #btn-diffuser.available{
     border-color:#1a4a7a;
@@ -332,25 +111,28 @@
     animation: gunArmedPulse 0.6s ease-in-out infinite;
   }
   @keyframes gunArmedPulse{
-    0%, 100% { box-shadow:0 0 10px rgba(174,224,255,0.7); transform:scale(1); }
-    50%      { box-shadow:0 0 22px rgba(174,224,255,1); transform:scale(1.06); }
+    0%, 100% { box-shadow:0 0 10px rgba(174,224,255,0.7); transform:scale(0.636); }
+    50%      { box-shadow:0 0 22px rgba(174,224,255,1); transform:scale(0.674); }
   }
-  #btn-diffuser:active{ transform:scale(0.92); }
+  #btn-diffuser:active{ transform:scale(0.552); }
   #gun-wrap{ position:relative; display:inline-block; }
   #gun-lock{
     position:absolute;
-    top:-14px; right:-14px;
+    top:50%; left:50%;
+    transform:translate(-50%, -50%);
     display:flex; align-items:center; justify-content:center;
     font-size:26px;
     pointer-events:none;
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
+    z-index:10;
   }
   #gun-lock-count{
     position:absolute;
     font-size:15px;
     font-weight:900;
     color:#fff;
-    top:5px;
+    top:50%; left:50%;
+    transform:translate(-50%, -50%);
     text-shadow:0 0 3px #000, 0 0 3px #000;
   }
   #gun-wrap.unlocked #gun-lock{ display:none; }
@@ -368,16 +150,18 @@
     font-weight:700;
     padding:12px 32px;
     border-radius:10px;
-    border:1px solid #7a5f1f;
-    background:#a07a20;
+    border:1px solid #1e5da0;
+    background:#3a8bff;
     color:#fff;
     cursor:pointer;
+    transform:scale(0.6);
+    transform-origin:center;
   }
-  #btn-hint:active{ background:#c0942a; }
+  #btn-hint:active{ background:#2a7ce0; }
   #action-row{
     position:relative;
     width:var(--board-max-w, 420px);
-    margin:14px auto 0;
+    margin:2px auto 0;
     display:flex;
     flex-direction:column;
   }
@@ -484,8 +268,8 @@
     text-align:center;
   }
   #btn-hub{
-    align-self:flex-start;
-    margin-top:8px;
+    align-self:center;
+    margin-top:2px;
     font-size:12px;
     font-weight:700;
     padding:6px 12px;
