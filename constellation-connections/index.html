@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Constellation Connections | v1.4 -->
+<!-- Constellation Connections | v1.5 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1378,6 +1378,28 @@
     document.getElementById('hud-score').textContent = highestNumber;
     document.getElementById('hud-best').textContent = bestChain;
     document.getElementById('hud-merges').textContent = mergeCount;
+    saveScores();
+  }
+
+  function saveScores(){
+    localStorage.setItem('constellation-scores', JSON.stringify({
+      highestNumber, bestChain, mergeCount
+    }));
+  }
+
+  function loadScores(){
+    try {
+      const saved = localStorage.getItem('constellation-scores');
+      if(saved){
+        const data = JSON.parse(saved);
+        highestNumber = data.highestNumber || 0;
+        bestChain = data.bestChain || 0;
+        mergeCount = data.mergeCount || 0;
+        updateHud();
+      }
+    } catch(e){
+      // localStorage unavailable or corrupted, ignore
+    }
   }
 
   // ---------- Audio: Stack Tones pattern ----------
@@ -1754,6 +1776,7 @@
   window.addEventListener('resize', seedStarfield);
 
   // ---------- Init ----------
+  loadScores();
   initGrid();
   updateHud();
   updateBoardScale();
