@@ -1,0 +1,1778 @@
+<!--
+  Learn Morse Code
+  v7.7
+
+  Changelog:
+  v7.7 - Added the version number to the page <title> and Debug button
+         label (was only in the file's header comment before) — matches
+         this project's standard of surfacing the version in the
+         filename, title, and Debug label together.
+  v7.6 - Fixed the top row's letter labels getting clipped by the
+         board's top border — a side effect of the v7.5 font-size bump.
+         At 15px, a label's glyph top sits ~12px above its baseline,
+         which was landing above the SVG viewBox's old top edge (y=16).
+         Shifted the viewBox up (y=16 -> y=6) and grew its height to
+         match (380 -> 390) so there's clearance at the top without
+         moving the bottom row any closer to its own edge.
+  v7.5 - Increased the morse tree's letter labels from 11px to 15px for
+         better readability. Checked clearance against the tightened
+         55px row/column grid spacing on both axes before shipping —
+         plenty of margin, no overlap risk with neighboring nodes.
+  v7.4 - Fixed shiritori not actually being treated as the PRIMARY
+         response type, per spec: the code was checking isRhyme before
+         isShiritori, so any response that happened to satisfy both got
+         mislabeled as "rhyme" even when functioning as shiritori. Flipped
+         the check order (shiritori checked/reported first) and updated
+         every place that described the bonus — tutorial text, level-
+         select descriptions ("decode + rhyme bonus" -> "decode + shiritori
+         bonus"), and several code comments — that still framed rhyme as
+         the primary or only bonus type. Rhyme remains fully accepted as
+         a secondary option. Verified the priority fix directly: a
+         response valid only as shiritori (not in the prompt's rhyme
+         list) now correctly reports matchType='shiritori'.
+  v7.3 - Rewrote the "How to play" tutorial with clearer, more concrete
+         numbered steps (1/2/3/Bonus structure), naming the actual UI
+         elements (Play button, Beeper Button, Verify, the challenge
+         mode icons) and giving explicit shiritori examples
+         (Red→Dry, Yell→Lot, Toll→Lad, Dew→Won). Verified full div
+         open/close balance across the body (28/28) after the rewrite.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Learn Morse Code v7.7</title>
+<style>
+  :root{
+    --board-max-w: 380px;
+    --amber: #d9a441;
+    --amber-dim: #6b5a34;
+    --green: #3ecf6e;
+    --red: #d9534f;
+    --purple: #645394;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color: transparent; user-select:none; }
+  body{
+    margin:0;
+    background: radial-gradient(ellipse at top, #1c2118 0%, #0c0e0a 70%);
+    color:#eee;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height:100vh;
+    padding-bottom: 40px;
+  }
+  #app{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:10px;
+    padding-top:18px;
+    padding-bottom:56px;
+  }
+
+  #title-row{
+    width:var(--board-max-w);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    position:relative;
+  }
+  #game-title{
+    font-size:19px;
+    font-weight:800;
+    letter-spacing:0.5px;
+    color:#f0e6c8;
+    text-shadow: 0 0 12px rgba(217,164,65,0.35);
+  }
+  #btn-info{
+    position:absolute;
+    right:0;
+    width:26px; height:26px;
+    border-radius:50%;
+    font-size:14px;
+    font-weight:900;
+    border:2px solid var(--purple);
+    background:transparent;
+    color:var(--purple);
+    cursor:pointer;
+  }
+
+  /* ---- Play bar (contains the static transmission track directly) ---- */
+  /* Whole section shrunk ~30% from its previous size to reclaim vertical
+     space toward fitting on a phone screen with no scrolling. */
+  #play-bar{
+    width:var(--board-max-w);
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    background:#151812;
+    border:1px solid #2c3226;
+    border-radius:9px;
+    padding:7px 10px;
+  }
+  #play-bar-main{
+    display:flex;
+    align-items:center;
+    gap:7px;
+  }
+  #btn-play{
+    flex:0 0 auto;
+    width:36px; height:36px;
+    border-radius:50%;
+    border:2px solid var(--amber);
+    background: radial-gradient(circle at 35% 30%, #3a2f18, #1a1508);
+    color:var(--amber);
+    font-size:14px;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #btn-play:active{ background:#2a2210; }
+
+  /* ---- Transmission bar: static dot/dash readout ---- */
+  #transmission-bar{
+    flex:1;
+    height:36px;
+    background:#0e0f0a;
+    border:1px solid #2c3226;
+    border-radius:6px;
+    padding:0;
+    overflow:hidden;
+    position:relative;
+    transition: opacity 0.2s, background 0.2s;
+  }
+  /* Off mode: slot goes fully transparent — no readout of any kind */
+  #transmission-bar.mode-off{
+    background:transparent;
+    border-color:#1c2018;
+  }
+  #transmission-track{
+    position:static;
+    width:100%;
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    white-space:nowrap;
+    font-family: 'Courier New', monospace;
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:1.5px;
+    color: var(--amber);
+    text-shadow: 0 0 6px rgba(217,164,65,0.6);
+    padding:0 4px;
+  }
+  #transmission-track.hidden{
+    visibility:hidden;
+  }
+  #transmission-bar.idle #transmission-track{
+    color:#4a4a3e;
+    text-shadow:none;
+  }
+  /* Mode toggle buttons: now a horizontal row underneath the bar, instead
+     of stacked vertically along its right inner edge — frees up the full
+     width of the readout for text and reclaims vertical space overall. */
+  #transmission-mode-buttons{
+    display:flex;
+    gap:6px;
+  }
+  .mode-btn{
+    flex:1;
+    height:22px;
+    display:flex; align-items:center; justify-content:center;
+    background:#171a11;
+    border:1px solid #2c3226;
+    border-radius:5px;
+    color:#4a4a3e;
+    font-size:11px;
+    line-height:1;
+    cursor:pointer;
+    padding:0;
+  }
+  .mode-btn:active{ background:#2a2210; }
+  .mode-btn.active{
+    background: var(--amber);
+    color:#1a1408;
+    box-shadow: inset 0 0 0 1px #f0d9a0;
+  }
+
+  /* ---- HUD: streak ---- */
+  #hud{
+    width:var(--board-max-w);
+    display:flex;
+    justify-content:space-between;
+    font-size:12px;
+    color:#8a9080;
+    padding:0 2px;
+  }
+  #hud b{ color:#f0e6c8; }
+
+  /* ---- Board wrap: the morse tree card ---- */
+  #board-wrap{
+    position:relative;
+    width:var(--board-max-w);
+    background:#14140f;
+    border:1px solid #3a3626;
+    border-radius:18px;
+    padding:12px 10px 8px;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.5), 0 8px 24px rgba(0,0,0,0.4);
+  }
+  #board-wrap::before{
+    content:"MORSE CODE";
+    position:absolute;
+    top:-9px; left:14px;
+    background:#0c0e0a;
+    padding:0 8px;
+    font-size:10px;
+    letter-spacing:3px;
+    color:#7a8070;
+    font-weight:700;
+  }
+
+  /* ---- Result popup: grows out from center then fades, over the board ---- */
+  #result-popup{
+    position:absolute;
+    top:50%; left:50%;
+    transform:translate(-50%,-50%) scale(0.3);
+    font-size:34px;
+    font-weight:900;
+    letter-spacing:1px;
+    pointer-events:none;
+    opacity:0;
+    z-index:150;
+    text-align:center;
+    white-space:nowrap;
+  }
+  #result-popup.correct{
+    color: var(--green);
+    text-shadow: 0 0 18px rgba(62,207,110,0.8);
+  }
+  #result-popup.wrong{
+    color: var(--red);
+    text-shadow: 0 0 18px rgba(217,83,79,0.8);
+  }
+  #result-popup.pop{
+    animation: popGrowFade 1.1s ease-out forwards;
+  }
+  @keyframes popGrowFade{
+    0%   { transform:translate(-50%,-50%) scale(0.3); opacity:0; }
+    25%  { transform:translate(-50%,-50%) scale(1.15); opacity:1; }
+    45%  { transform:translate(-50%,-50%) scale(1); opacity:1; }
+    100% { transform:translate(-50%,-50%) scale(1); opacity:0; }
+  }
+
+  svg#tree{
+    width:100%;
+    height:auto;
+    display:block;
+  }
+  .node-shape{
+    fill:#4a4530;
+    stroke:#6b6448;
+    stroke-width:1.5;
+    transition: fill 0.15s, stroke 0.15s, filter 0.15s;
+  }
+  .node-shape.lit-current{
+    fill:var(--amber);
+    stroke:#f0c675;
+    filter: drop-shadow(0 0 6px rgba(217,164,65,0.9));
+  }
+  .node-shape.lit-path{
+    fill:var(--green);
+    stroke:#8ef2a8;
+    filter: drop-shadow(0 0 5px rgba(62,207,110,0.7));
+  }
+  .node-shape.lit-wrong{
+    fill:var(--red);
+    stroke:#f29490;
+    filter: drop-shadow(0 0 6px rgba(217,83,79,0.8));
+  }
+  .node-letter{
+    fill:#cfd0c4;
+    font-size:15px;
+    font-weight:700;
+    font-family: inherit;
+  }
+  .tree-line{
+    stroke:#3a3626;
+    stroke-width:6;
+  }
+  .shine-dot{
+    fill:#ffffff;
+    filter: drop-shadow(0 0 6px rgba(255,255,255,0.95)) drop-shadow(0 0 12px rgba(255,255,255,0.6));
+    opacity:1;
+    transition: opacity 0.14s ease-out, transform 0.14s ease-out;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .shine-dot.shine-blink{
+    opacity:0;
+    transform: scale(1.8);
+  }
+  .antenna-line{
+    stroke:#6b6448;
+    stroke-width:6;
+  }
+
+  /* ---- Word-in-progress display ---- */
+  #word-progress{
+    flex:1;
+    min-height:28px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    font-size:20px;
+    font-weight:800;
+    letter-spacing:4px;
+    color:#f0e6c8;
+  }
+  .progress-slot{
+    min-width:22px;
+    text-align:center;
+    border-bottom:2px solid #3a3626;
+    padding-bottom:2px;
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .progress-slot.filled{ border-bottom-color: var(--amber); }
+  .progress-slot.playback-lit{
+    color:#f5d742;
+    border-bottom-color:#f5d742;
+    text-shadow: 0 0 6px rgba(245,215,66,0.7);
+  }
+
+  /* ---- Morse code readout for current letter ---- */
+  #current-morse{
+    width:var(--board-max-w);
+    min-height:16px;
+    font-size:16px;
+    letter-spacing:3px;
+    color:var(--amber);
+    text-align:center;
+    border:1px solid #3a3626;
+    border-radius:8px;
+    padding:6px 10px;
+    margin-bottom:-4px;
+    box-sizing:border-box;
+  }
+  #current-morse .live-code{
+    color:#ffffff; /* the in-progress letter, not yet auto-confirmed */
+    text-shadow: 0 0 6px rgba(255,255,255,0.7);
+  }
+  #current-morse .morse-sym{
+    transition: color 0.08s, text-shadow 0.08s;
+  }
+  #current-morse .morse-sym.playback-lit{
+    color:#ffffff;
+    text-shadow: 0 0 8px rgba(255,255,255,0.95);
+  }
+
+  /* ---- Word progress: submitted letters, with a playback button ---- */
+  #word-progress-row{
+    width:var(--board-max-w);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+  }
+  #word-progress-row #btn-clear-letter{
+    flex:0 0 auto;
+    width:auto;
+    padding:5px 12px;
+    font-size:11px;
+  }
+  #btn-playback-letters{
+    flex:0 0 auto;
+    width:26px; height:26px;
+    border-radius:50%;
+    border:1px solid var(--amber);
+    background:transparent;
+    color:var(--amber);
+    font-size:11px;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    padding:0;
+  }
+  #btn-playback-letters:active{ background:rgba(217,164,65,0.15); }
+  #btn-playback-letters:disabled{
+    opacity:0.3;
+    cursor:default;
+  }
+
+  /* ---- Action row: Verify/Respond/Next-Word (left) + Boop button (right), one row ---- */
+  #action-row{
+    width:var(--board-max-w);
+    margin-top:2px;
+  }
+  #action-bar{
+    display:flex;
+    align-items:stretch;
+    gap:10px;
+  }
+  #btn-tap{
+    flex:1.3;
+    padding:14px 0;
+    border-radius:14px;
+    border:none;
+    background: linear-gradient(var(--amber), #b3822f);
+    color:#241a08;
+    font-weight:800;
+    font-size:13px;
+    letter-spacing:0.5px;
+    cursor:pointer;
+    box-shadow: 0 4px 0 #7a5a1f;
+  }
+  #btn-tap:active,
+  #btn-tap.pressed{
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #7a5a1f;
+    background: linear-gradient(#b3822f, #7a5a1f);
+  }
+  .action-btn-sm{
+    flex:1;
+    padding:10px 0;
+    border-radius:10px;
+    border:1px solid #3a3626;
+    background:#1b1c16;
+    color:#c8cabc;
+    font-weight:700;
+    font-size:13px;
+    cursor:pointer;
+  }
+  .action-btn-sm:active{ background:#26271e; }
+  .action-btn-sm.submit{
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .action-btn-sm.respond{
+    border-color: #5aa9e6;
+    color: #5aa9e6;
+  }
+  .action-btn-sm:disabled{
+    opacity:0.35;
+    cursor:default;
+  }
+
+  /* ---- Feedback banner ---- */
+  #feedback{
+    width:var(--board-max-w);
+    text-align:center;
+    font-size:14px;
+    font-weight:700;
+    min-height:20px;
+    color:#8a9080;
+  }
+  #feedback.correct{ color: var(--green); }
+  #feedback.wrong{ color: var(--red); }
+
+  /* ---- Home row ---- */
+  #home-row{
+    position:fixed;
+    left:50%;
+    bottom:10px;
+    transform:translateX(-50%);
+    width:var(--board-max-w);
+    display:flex;
+    justify-content:center;
+    align-items:stretch;
+    gap:0;
+    z-index:200;
+  }
+  #btn-hub{
+    font-size:12px; font-weight:700; padding:6px 12px;
+    border-radius:8px 0 0 8px; border:1px solid var(--purple); border-right:none;
+    background:transparent; color:var(--purple); text-decoration:none; cursor:pointer;
+  }
+  #btn-volume{
+    width:34px; height:100%;
+    font-size:14px;
+    padding:6px 0;
+    border-radius:0 8px 8px 0;
+    border:1px solid #3a3626;
+    background:transparent;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #btn-volume[data-vol="mute"]{ border-color: var(--red); color: var(--red); }
+  #btn-volume[data-vol="quiet"]{ border-color: var(--amber); color: var(--amber); }
+  #btn-volume[data-vol="loud"]{ border-color: var(--green); color: var(--green); }
+  #btn-volume:active{ background:rgba(255,255,255,0.06); }
+
+  /* ---- Level difficulty selector ---- */
+  #level-select-row{
+    width:var(--board-max-w);
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:6px;
+    margin-top:2px;
+  }
+  #level-select-label{
+    font-size:11px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    color:#7a8070;
+    font-weight:700;
+  }
+  #level-select-buttons{
+    display:flex;
+    gap:8px;
+  }
+  .level-btn{
+    width:36px; height:36px;
+    border-radius:50%;
+    border:1px solid #3a3626;
+    background:#14140f;
+    color:#8a9080;
+    font-weight:800;
+    font-size:14px;
+    cursor:pointer;
+  }
+  .level-btn:active{ background:#1e1f17; }
+  .level-btn.active{
+    border-color: var(--amber);
+    color: var(--amber);
+    background:#231c0e;
+    box-shadow: 0 0 8px rgba(217,164,65,0.4);
+  }
+  #level-select-desc{
+    font-size:11px;
+    color:#6a7060;
+  }
+
+  /* ---- Tutorial overlay ---- */
+  .overlay{
+    position:fixed; inset:0;
+    background:rgba(0,0,0,0.88);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px; z-index:200;
+    visibility:hidden; opacity:0; transition:opacity 0.2s;
+    padding:24px;
+  }
+  .overlay.show{ visibility:visible; opacity:1; }
+  .overlay-box{
+    max-width:340px;
+    background:#14140f;
+    border:1px solid #3a3626;
+    border-radius:14px;
+    padding:20px;
+    font-size:13px;
+    line-height:1.6;
+    color:#c8cabc;
+  }
+  .overlay-box h3{ margin:0 0 8px; color:#f0e6c8; font-size:16px; }
+  #logs-textarea{
+    width:100%;
+    height:220px;
+    box-sizing:border-box;
+    background:#0e0f0a;
+    border:1px solid #3a3626;
+    border-radius:8px;
+    color:#c8cabc;
+    font-family:'Courier New', monospace;
+    font-size:12px;
+    padding:8px;
+    resize:none;
+    margin-bottom:10px;
+  }
+  #btn-logs-close{
+    font-size:14px; font-weight:700; padding:8px 18px;
+    border-radius:8px; border:none; background:#3a8bff; color:#fff; cursor:pointer;
+  }
+  .overlay button{
+    font-size:14px; font-weight:700; padding:8px 18px; border-radius:8px;
+    border:none; background:#3a8bff; color:#fff; cursor:pointer;
+  }
+
+  /* ---- Debug (screen-space) ---- */
+  #btn-debug-toggle{
+    position:fixed; left:6px; bottom:6px; z-index:300;
+    font-size:10px; font-weight:700; padding:3px 8px; border-radius:5px;
+    border:1px solid #2a2a2a; background:transparent; color:#3a3a3a; cursor:pointer;
+  }
+  #debug-panel{
+    position:fixed; left:6px; bottom:32px; z-index:300;
+    display:none; flex-direction:column; gap:4px;
+  }
+  #debug-panel.show{ display:flex; }
+  #debug-panel button{
+    font-size:10px; font-weight:700; padding:3px 8px; border-radius:5px;
+    border:1px solid #444; background:#1b2830; color:#888; cursor:pointer; text-align:left;
+  }
+  #debug-panel button:active{ background:#243440; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="title-row">
+    <div id="game-title">Learn Morse Code</div>
+    <button id="btn-info">?</button>
+  </div>
+
+  <div id="play-bar">
+    <div id="play-bar-main">
+      <button id="btn-play">▶</button>
+      <div id="transmission-bar" class="idle">
+        <span id="transmission-track">&nbsp;</span>
+      </div>
+    </div>
+    <div id="transmission-mode-buttons">
+      <button id="btn-mode-off" class="mode-btn" title="Off: no visual" data-mode="off">🚫</button>
+      <button id="btn-mode-eye" class="mode-btn active" title="Eye: dots and dashes" data-mode="eye">👁</button>
+      <button id="btn-mode-letter" class="mode-btn" title="Letter: plain text" data-mode="letter">🔤</button>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div>Streak: <b id="streak-count">0</b></div>
+    <div id="round-count">Round 0</div>
+  </div>
+
+  <div id="board-wrap">
+    <div id="result-popup"></div>
+    <svg id="tree" viewBox="20 6 700 390"></svg>
+  </div>
+
+  <div id="current-morse">&nbsp;</div>
+  <div id="word-progress-row">
+    <button id="btn-playback-letters" title="Play back your submitted letters" disabled>▶</button>
+    <div id="word-progress"></div>
+    <button id="btn-clear-letter" class="action-btn-sm">Clear</button>
+  </div>
+
+  <div id="action-row">
+    <div id="action-bar">
+      <button id="btn-submit-word" class="action-btn-sm submit" disabled>Verify</button>
+      <button id="btn-respond-word" class="action-btn-sm respond" disabled style="display:none;">Respond</button>
+      <button id="btn-skip-respond" class="action-btn-sm" style="display:none;">Next Word</button>
+      <button id="btn-tap">HOLD = DASH / TAP = DOT</button>
+    </div>
+  </div>
+
+  <div id="feedback" style="display:none;">&nbsp;</div>
+
+  <div id="home-row">
+    <a id="btn-hub" href="../">Home</a>
+    <button id="btn-volume" data-vol="loud">🔊</button>
+  </div>
+
+  <div id="level-select-row">
+    <div id="level-select-label">Level Difficulty</div>
+    <div id="level-select-buttons">
+      <button class="level-btn active" data-level="1">1</button>
+      <button class="level-btn" data-level="2">2</button>
+      <button class="level-btn" data-level="3">3</button>
+      <button class="level-btn" data-level="4">4</button>
+    </div>
+    <div id="level-select-desc">1 letter · decode only</div>
+  </div>
+
+  <button id="btn-debug-toggle">Debug v7.7</button>
+  <div id="debug-panel">
+    <button id="btn-debug-restart">Restart</button>
+    <button id="btn-logs">Logs</button>
+  </div>
+
+  <div id="logs-overlay" class="overlay">
+    <div class="overlay-box">
+      <h3>Session Log</h3>
+      <textarea id="logs-textarea" readonly></textarea>
+      <button id="btn-logs-close">Close</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay-info">
+    <div class="overlay-box">
+      <h3>How to play</h3>
+      <b>1)</b> Press the top <b>Play</b> button to receive a transmission.
+      Choose what level of difficulty you want to play at the bottom of
+      the screen. Choose what challenge mode you want the transmission
+      in: <b>No visual</b> (🚫), <b>Dots and Dashes</b> (👁), or
+      <b>Letters</b> (🔤).<br><br>
+      <b>2)</b> Decode the message below with the <b>Beeper Button</b> —
+      tap for a dot, hold for a dash. Copy the transmission's code.<br><br>
+      <b>3)</b> Tap <b>Verify</b> to see if you got it right.<br><br>
+      <b>Bonus)</b> At Level 3 and 4, once you Verify a transmission
+      correctly, respond with a <b>shiritori</b> — starting your word
+      with the last letter of the transmission's word. Example:
+      Red→Dry, Yell→Lot, Toll→Lad, Dew→Won. A <b>rhyme</b> works too,
+      but shiritori is the main way to respond.
+      <br><br>
+      <button id="btn-info-close">Got it</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= MORSE DATA ================= */
+const MORSE = {
+  A:'.-', B:'-...', C:'-.-.', D:'-..', E:'.', F:'..-.', G:'--.', H:'....',
+  I:'..', J:'.---', K:'-.-', L:'.-..', M:'--', N:'-.', O:'---', P:'.--.',
+  Q:'--.-', R:'.-.', S:'...', T:'-', U:'..-', V:'...-', W:'.--', X:'-..-',
+  Y:'-.--', Z:'--..'
+};
+const MORSE_TO_LETTER = Object.fromEntries(Object.entries(MORSE).map(([k,v])=>[v,k]));
+
+/* ================= WORD BANKS PER LEVEL ================= */
+// Level 1: single letters — pure decode practice, no shiritori/Respond button.
+const LEVEL1_LETTERS = ['E','T','A','N','I','M','S','O','H','R','D','L','U'];
+
+// Level 2: two-letter words — decode only, no shiritori/Respond button.
+const LEVEL2_WORDS = ['AM','AN','AS','AT','BE','BY','GO','HE','IF','IN','IS','IT','ME','MY','NO','OF','ON','OR','SO','TO','UP','US','WE'];
+
+// Level 3: three-letter words, decode + shiritori bonus (rhyme also accepted).
+const RHYME_GROUPS_L3 = [
+  { prompts:['CAT','HAT','BAT','MAT'], accepted:['CAT','HAT','BAT','MAT','SAT','RAT','FAT','PAT'] },
+  { prompts:['COW','BOW','HOW','NOW'], accepted:['COW','BOW','HOW','NOW','WOW','SOW'] },
+  { prompts:['DOG','LOG','FOG','JOG'], accepted:['DOG','LOG','FOG','JOG','HOG'] },
+  { prompts:['SUN','RUN','FUN','BUN'], accepted:['SUN','RUN','FUN','BUN','GUN','NUN'] },
+  { prompts:['PEN','TEN','HEN','MEN'], accepted:['PEN','TEN','HEN','MEN','DEN'] },
+  { prompts:['BED','RED','FED','LED'], accepted:['BED','RED','FED','LED'] },
+  { prompts:['PIG','BIG','WIG','FIG'], accepted:['PIG','BIG','WIG','FIG','DIG','JIG'] },
+  { prompts:['CAR','JAR','FAR','TAR'], accepted:['CAR','JAR','FAR','TAR'] },
+  { prompts:['BOX','FOX'], accepted:['BOX','FOX'] },
+  { prompts:['MAP','CAP','LAP','TAP','GAP'], accepted:['MAP','CAP','LAP','TAP','NAP','GAP'] },
+  { prompts:['SEA','TEA','PEA'], accepted:['SEA','TEA','PEA'] },
+  { prompts:['TOP','HOP','MOP','COP'], accepted:['TOP','HOP','MOP','COP','POP'] },
+  { prompts:['BUG','RUG','HUG','MUG'], accepted:['BUG','RUG','HUG','MUG','JUG','TUG'] },
+  { prompts:['FAN','MAN','CAN','PAN'], accepted:['FAN','MAN','CAN','PAN','VAN','RAN'] },
+  { prompts:['CUP','PUP'], accepted:['CUP','PUP'] },
+  { prompts:['ANT'], accepted:['ANT'] }
+];
+
+// Level 4: four-letter words, decode + shiritori bonus (rhyme also accepted).
+const RHYME_GROUPS_L4 = [
+  { prompts:['STAR','CART','PART'], accepted:['STAR','CART','PART'] },
+  { prompts:['LAMP','CAMP','STAMP','RAMP'], accepted:['LAMP','CAMP','STAMP','RAMP','DAMP'] },
+  { prompts:['NEST','BEST','TEST','REST'], accepted:['NEST','BEST','TEST','REST','WEST','PEST'] },
+  { prompts:['DUCK','LUCK','TRUCK','STUCK'], accepted:['DUCK','LUCK','TRUCK','STUCK','PUCK'] },
+  { prompts:['FROG','CLOG'], accepted:['FROG','CLOG'] },
+  { prompts:['KING','RING','SING','WING'], accepted:['KING','RING','SING','WING','SWING'] },
+  { prompts:['LAKE','CAKE','RAKE','SNAKE'], accepted:['LAKE','CAKE','RAKE','SNAKE','BAKE'] },
+  { prompts:['MOON','SOON','SPOON'], accepted:['MOON','SOON','SPOON'] },
+  { prompts:['GOAT','BOAT','COAT'], accepted:['GOAT','BOAT','COAT'] },
+  { prompts:['CLAM','JAM'], accepted:['CLAM','JAM'] },
+  { prompts:['EAST'], accepted:['EAST'] }
+];
+
+const LEVEL_CONFIG = {
+  1: { label:'Level 1 · 1 Letter',  respond:false },
+  2: { label:'Level 2 · 2 Letters', respond:false },
+  3: { label:'Level 3 · 3 Letters', respond:true  },
+  4: { label:'Level 4 · 4 Letters', respond:true  }
+};
+
+/* ================= NODE LAYOUT (column-based grid, matches reference chart exactly) ================= */
+// Placed on a 13-column × 7-row grid, with center (C7) at x=378.
+// Columns assigned to match the reference chart's horizontal positions exactly.
+// Rows assigned to match the visual groupings (root, 1st level, 2nd level, etc.).
+// Row spacing tightened to 55px (matching the H-S horizontal gap) for a more
+// compact vertical layout, verified against node sizes (max 26x18 rect / r=11
+// circle) to ensure no overlap.
+// C1: H | C2: S,V | C3: I,U | C4: F,L,P | C5: R | C6: E,A,W,J | C7: [Center]
+// C8: T | C9: N,D,B | C10: M,K,X | C11: G,Z | C12: O,Q,C | C13: Y
+const NODES = {
+  H:{x:48,y:40},
+  S:{x:103,y:40}, I:{x:158,y:40}, E:{x:323,y:40},
+  T:{x:433,y:40}, M:{x:543,y:40}, O:{x:653,y:40},
+
+  V:{x:103,y:95}, U:{x:158,y:95}, A:{x:323,y:95},
+  G:{x:598,y:95}, Q:{x:653,y:95},
+
+  F:{x:213,y:150}, Z:{x:598,y:150},
+
+  L:{x:213,y:205}, R:{x:268,y:205},
+
+  W:{x:323,y:260}, N:{x:488,y:260}, K:{x:543,y:260}, Y:{x:653,y:260},
+
+  P:{x:213,y:315}, D:{x:488,y:315}, X:{x:543,y:315}, C:{x:598,y:315},
+
+  J:{x:323,y:370}, B:{x:488,y:370}
+};
+// letter -> node shape ('rect' for dash-position nodes, 'circle' for dot-position)
+// derived from morse: last symbol of the code determines shape (dash=rect, dot=circle)
+function shapeFor(letter){
+  const code = MORSE[letter];
+  return code[code.length-1] === '-' ? 'rect' : 'circle';
+}
+// parent chain for drawing tree-lines: each letter's parent is code minus last symbol
+function parentOf(letter){
+  const code = MORSE[letter];
+  if(code.length === 1) return null; // connects to antenna
+  const parentCode = code.slice(0,-1);
+  return MORSE_TO_LETTER[parentCode] || null;
+}
+
+/* ================= AUDIO (raw oscillator, Stack-Tones style one-shot) ================= */
+let audioCtx = null;
+let masterGain = null;
+const VOLUME_LEVELS = { mute: 0, quiet: 0.06, loud: 0.16 };
+let currentVolumeLevel = 'loud'; // matches the peak gain values already tuned in the live tone
+function getCtx(){
+  if(!audioCtx){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = VOLUME_LEVELS[currentVolumeLevel];
+    masterGain.connect(audioCtx.destination);
+  }
+  return audioCtx;
+}
+function setVolumeLevel(level){
+  currentVolumeLevel = level;
+  if(masterGain){
+    const ctx = getCtx();
+    masterGain.gain.setValueAtTime(VOLUME_LEVELS[level], ctx.currentTime);
+  }
+}
+// ---- Live key-down tone: starts the instant the button is pressed, holds
+// while pressed, cuts the instant it's released — a real telegraph key,
+// not a pre-baked duration guessed after the fact.
+let liveOsc = null;
+let liveGain = null;
+function startLiveTone(){
+  const ctx = getCtx();
+  const now = ctx.currentTime;
+  liveOsc = ctx.createOscillator();
+  liveGain = ctx.createGain();
+  liveOsc.type = 'square';
+  liveOsc.frequency.value = 720;
+  liveGain.gain.setValueAtTime(0, now);
+  liveGain.gain.linearRampToValueAtTime(0.16, now + 0.002); // sharp attack, no click
+  liveOsc.connect(liveGain);
+  liveGain.connect(masterGain);
+  liveOsc.start(now);
+}
+function stopLiveTone(){
+  if(!liveOsc) return;
+  const ctx = getCtx();
+  const now = ctx.currentTime;
+  liveGain.gain.cancelScheduledValues(now);
+  liveGain.gain.setValueAtTime(liveGain.gain.value, now);
+  liveGain.gain.linearRampToValueAtTime(0, now + 0.015); // quick clean cutoff, no click
+  liveOsc.stop(now + 0.02);
+  liveOsc = null;
+  liveGain = null;
+}
+const DOT_SEC = 0.12;
+const DASH_SEC = 0.32;
+const GAP_SEC = 0.12;
+// play a full morse string (e.g. "-.-.") as timed beeps, returns total duration
+// simple speech-like beep pattern to "announce" the prompt word letter by letter,
+// with a distinct tone so it doesn't look like the answer's morse.
+// Also drives the transmission-bar readout (dots/dashes, static text) shown
+// alongside the beeps.
+const transmissionBar = document.getElementById('transmission-bar');
+const transmissionTrack = document.getElementById('transmission-track');
+const modeButtons = document.querySelectorAll('.mode-btn');
+
+// Three display modes for the incoming transmission:
+// 'off'    - fully transparent slot, no visual at all (audio only)
+// 'eye'    - static dots/dashes readout for the whole word
+// 'letter' - shows the plain English word/letters instead of morse symbols
+let transmissionMode = 'eye';
+
+function setTransmissionMode(mode){
+  transmissionMode = mode;
+  modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+  transmissionBar.classList.toggle('mode-off', mode === 'off');
+  transmissionTrack.classList.toggle('hidden', mode === 'off');
+  logEvent('Transmission display mode: ' + mode);
+  // if a word is currently mid-announce, refresh the track's content to match
+  // the newly selected mode immediately rather than waiting for the next round
+  if(currentAnnounceWord){
+    renderTransmissionText(currentAnnounceWord);
+  }
+}
+modeButtons.forEach(btn=>{
+  btn.addEventListener('click', ()=> setTransmissionMode(btn.dataset.mode));
+});
+
+// Builds the track's displayed text for the current mode, without touching
+// the scroll animation itself (that's handled separately in announceWord).
+let currentAnnounceWord = null;
+function renderTransmissionText(word){
+  if(transmissionMode === 'letter'){
+    transmissionTrack.textContent = word;
+  } else {
+    const morseText = word.split('').map(letter => MORSE[letter].replace(/-/g,'_')).join(' ');
+    transmissionTrack.textContent = morseText;
+  }
+}
+
+
+function resetTransmissionBar(){
+  currentAnnounceWord = null;
+  transmissionTrack.textContent = '';
+  transmissionBar.classList.add('idle');
+}
+
+function announceWord(word, cb){
+  const ctx = getCtx();
+  let t = 0;
+
+  currentAnnounceWord = word;
+  transmissionBar.classList.remove('idle');
+  renderTransmissionText(word);
+
+  for(const letter of word){
+    const code = MORSE[letter];
+    for(const sym of code){
+      const dur = sym === '.' ? DOT_SEC : DASH_SEC;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 720;
+      gain.gain.setValueAtTime(0, now+t);
+      gain.gain.linearRampToValueAtTime(0.16, now+t+0.002);
+      gain.gain.setValueAtTime(0.16, now+t+Math.max(dur-0.015,0.003));
+      gain.gain.linearRampToValueAtTime(0, now+t+dur);
+      osc.connect(gain); gain.connect(masterGain);
+      osc.start(now+t); osc.stop(now+t+dur+0.02);
+      t += dur + GAP_SEC;
+    }
+    t += GAP_SEC * 2; // letter gap
+  }
+  setTimeout(cb, t*1000);
+}
+
+const HOLD_AFTER_PLAYBACK_MS = 600;
+const btnPlaybackLetters = document.getElementById('btn-playback-letters');
+
+// Re-voices the letters submitted so far (confirmedLetters), beeping them out
+// the same way an incoming transmission plays, with each letter's slot in
+// word-progress lighting up in sync as its beeps play. The dot/dash readout
+// is already visible at all times now (see renderProgress), so playback's
+// job is just the audio + a visual sweep — then it holds briefly once the
+// last beep finishes before re-enabling, so the final letter's highlight
+// doesn't vanish the instant the sound stops.
+let playbackInFlight = false;
+function playbackConfirmedLetters(){
+  if(playbackInFlight || confirmedLetters.length === 0) return;
+  playbackInFlight = true;
+  btnPlaybackLetters.disabled = true;
+  logEvent('Playback: ' + confirmedLetters.join(''));
+
+  const ctx = getCtx();
+  const slotEls = wordProgressEl.querySelectorAll('.progress-slot');
+  let t = 0;
+  confirmedLetters.forEach((letter, letterIdx) => {
+    const code = MORSE[letter];
+    const letterStartT = t;
+    [...code].forEach((sym, symIdx) => {
+      const dur = sym === '.' ? DOT_SEC : DASH_SEC;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 720;
+      gain.gain.setValueAtTime(0, now+t);
+      gain.gain.linearRampToValueAtTime(0.16, now+t+0.002);
+      gain.gain.setValueAtTime(0.16, now+t+Math.max(dur-0.015,0.003));
+      gain.gain.linearRampToValueAtTime(0, now+t+dur);
+      osc.connect(gain); gain.connect(masterGain);
+      osc.start(now+t); osc.stop(now+t+dur+0.02);
+      // highlight this exact dot/dash symbol for the span of its own beep
+      const symStartT = t;
+      const symEndT = t + dur;
+      const symEl = currentMorseEl.querySelector(
+        `.morse-sym[data-letter-idx="${letterIdx}"][data-sym-idx="${symIdx}"]`
+      );
+      if(symEl){
+        setTimeout(()=> symEl.classList.add('playback-lit'), symStartT*1000);
+        setTimeout(()=> symEl.classList.remove('playback-lit'), symEndT*1000);
+      }
+      t += dur + GAP_SEC;
+    });
+    const letterEndT = t;
+    // highlight this letter's slot for the span of its own beeps
+    const slotEl = slotEls[letterIdx];
+    if(slotEl){
+      setTimeout(()=> slotEl.classList.add('playback-lit'), letterStartT*1000);
+      setTimeout(()=> slotEl.classList.remove('playback-lit'), letterEndT*1000);
+    }
+    t += GAP_SEC * 2; // letter gap
+  });
+
+  setTimeout(()=>{
+    playbackInFlight = false;
+    btnPlaybackLetters.disabled = confirmedLetters.length === 0;
+  }, t*1000 + HOLD_AFTER_PLAYBACK_MS);
+}
+btnPlaybackLetters.addEventListener('click', playbackConfirmedLetters);
+
+
+/* ================= GAME STATE ================= */
+let currentLevel = 1;
+let currentGroup = null;
+let currentPrompt = null;
+let currentLetterCode = ''; // dots/dashes typed for the in-progress letter
+let confirmedLetters = [];  // letters confirmed so far for the word being spelled
+let confirmedCodes = [];    // dot/dash string for each confirmed letter, parallel to confirmedLetters
+let hasUserInput = false;   // guards auto-confirm from ever running before the first real tap
+let sparkLastLetter = null; // spark's current position: null = "at the antenna" (fresh code)
+let autoConfirmTimer = null;
+let phase = 'decode'; // 'decode' = guessing the transmission, 'respond' = bonus shiritori/rhyme
+let streak = 0;
+let round = 0;
+let holdTimer = null;
+let holdStart = 0;
+const HOLD_THRESHOLD_MS = 260;
+
+const debugLog = [];
+const levelStartTime = performance.now();
+function logEvent(msg){
+  const t = (performance.now() - levelStartTime).toFixed(0);
+  debugLog.push(`[${t}ms] ${msg}`);
+}
+
+// Lightweight log: just "what the transmission was" and "what my response
+// was," for quick reference (e.g. reviewing a session) without the full
+// diagnostic noise in debugLog. Kept as its own array/copy action.
+const sessionLog = [];
+function logSession(msg){
+  sessionLog.push(msg);
+}
+
+/* ================= SVG TREE BUILD ================= */
+const svg = document.getElementById('tree');
+function buildTree(){
+  svg.innerHTML = '';
+  // center start position coordinates (triangle drawn at the end, on top of everything)
+  const antennaX = 378, antennaY = 40;
+
+  // lines: connect each letter to its parent (or antenna if top-level).
+  // Most use straight lines. Special cases:
+  // - F: down then right elbow jog off U
+  // - P: horizontal line rightward to connect to the W-J vertical branch
+  // - L, R: horizontal line leftward from the E-A-W-J vertical trunk
+  Object.keys(NODES).forEach(letter=>{
+    const node = NODES[letter];
+    const parent = parentOf(letter);
+    const parentPos = parent ? NODES[parent] : {x:antennaX, y:antennaY};
+
+    if(letter === 'F'){
+      // elbow: straight down from U, then straight across to F's offset slot
+      const elbow = document.createElementNS('http://www.w3.org/2000/svg','path');
+      elbow.setAttribute('d', `M${parentPos.x},${parentPos.y} L${parentPos.x},${node.y} L${node.x},${node.y}`);
+      elbow.setAttribute('class','tree-line');
+      elbow.setAttribute('id','line-'+letter);
+      elbow.setAttribute('fill','none');
+      svg.appendChild(elbow);
+    } else if(letter === 'P'){
+      // P branches horizontally from W, extending right to connect to the W-J vertical branch at column 6
+      const wjBranchX = 323;  // x-coordinate of the W-J vertical trunk (E, A, W, J all at x=323)
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${parentPos.x},${parentPos.y} L${wjBranchX},${parentPos.y} L${wjBranchX},${node.y} L${node.x},${node.y}`);
+      path.setAttribute('class','tree-line');
+      path.setAttribute('id','line-'+letter);
+      path.setAttribute('fill','none');
+      svg.appendChild(path);
+    } else if(letter === 'R'){
+      // R connects vertically from the E-A-W-J trunk down to R's own position.
+      // Stops exactly at R (rather than continuing to L) so a spark aimed at
+      // R doesn't overshoot past it — L gets its own separate line-L path below.
+      const eawjBranchX = 323;  // x-coordinate of the E-A-W-J vertical trunk
+      const aYLevel = 95;       // y-coordinate of A (where R branches off)
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${eawjBranchX},${aYLevel} L${eawjBranchX},${node.y} L${node.x},${node.y}`);
+      path.setAttribute('class','tree-line');
+      path.setAttribute('id','line-'+letter);
+      path.setAttribute('fill','none');
+      svg.appendChild(path);
+    } else if(letter === 'L'){
+      // L's own segment: just R to L. Kept separate from line-R so a spark
+      // aimed at R stops there, and a spark aimed at L rides this segment
+      // (starting from R's position) rather than overshooting from the trunk.
+      const rNode = NODES['R'];
+      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1', rNode.x); line.setAttribute('y1', rNode.y);
+      line.setAttribute('x2', node.x); line.setAttribute('y2', node.y);
+      line.setAttribute('class','tree-line');
+      line.setAttribute('id','line-'+letter);
+      svg.appendChild(line);
+    } else if(letter === 'G'){
+      // G connects vertically to the horizontal branch between M and O (at row 1).
+      // Path is drawn trunk-first, letter-second so the traveling spark (which
+      // always animates start->end of the path) moves DOWN toward G, not up.
+      const mOLineY = 40;  // y-coordinate of row 1 where M-O horizontal line is
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${node.x},${mOLineY} L${node.x},${node.y}`);
+      path.setAttribute('class','tree-line');
+      path.setAttribute('id','line-'+letter);
+      path.setAttribute('fill','none');
+      svg.appendChild(path);
+    } else if(letter === 'Z'){
+      // Z connects vertically downward from G
+      const gNode = NODES['G'];
+      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1', gNode.x); line.setAttribute('y1', gNode.y);
+      line.setAttribute('x2', node.x); line.setAttribute('y2', node.y);
+      line.setAttribute('class','tree-line');
+      line.setAttribute('id','line-'+letter);
+      svg.appendChild(line);
+    } else if(letter === 'C'){
+      // C connects vertically to the horizontal branch between K and Y (at row 5).
+      // Path is drawn trunk-first, letter-second so the traveling spark (which
+      // always animates start->end of the path) moves DOWN toward C, not up.
+      const kyLineY = 260;  // y-coordinate of row 5 where K-Y horizontal line is
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${node.x},${kyLineY} L${node.x},${node.y}`);
+      path.setAttribute('class','tree-line');
+      path.setAttribute('id','line-'+letter);
+      path.setAttribute('fill','none');
+      svg.appendChild(path);
+    } else if(letter === 'N'){
+      // N connects vertically to the horizontal branch between T and M (at row 1).
+      // Path is drawn trunk-first, letter-second so the traveling spark (which
+      // always animates start->end of the path) moves DOWN toward N, not up.
+      const tmLineY = 40;  // y-coordinate of row 1 where T-M horizontal line is
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${node.x},${tmLineY} L${node.x},${node.y}`);
+      path.setAttribute('class','tree-line');
+      path.setAttribute('id','line-'+letter);
+      path.setAttribute('fill','none');
+      svg.appendChild(path);
+    } else {
+      // standard line for all other letters
+      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1', parentPos.x); line.setAttribute('y1', parentPos.y);
+      line.setAttribute('x2', node.x); line.setAttribute('y2', node.y);
+      line.setAttribute('class','tree-line');
+      line.setAttribute('id','line-'+letter);
+      svg.appendChild(line);
+    }
+  });
+
+  // nodes
+  Object.keys(NODES).forEach(letter=>{
+    const node = NODES[letter];
+    const shape = shapeFor(letter);
+    let shapeEl;
+    if(shape === 'circle'){
+      shapeEl = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      shapeEl.setAttribute('cx', node.x); shapeEl.setAttribute('cy', node.y); shapeEl.setAttribute('r', 11);
+    } else {
+      shapeEl = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      shapeEl.setAttribute('x', node.x-13); shapeEl.setAttribute('y', node.y-9);
+      shapeEl.setAttribute('width', 26); shapeEl.setAttribute('height', 18); shapeEl.setAttribute('rx',3);
+    }
+    shapeEl.setAttribute('class','node-shape');
+    shapeEl.setAttribute('id', 'node-'+letter);
+    svg.appendChild(shapeEl);
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+    label.setAttribute('x', node.x);
+    label.setAttribute('y', shape==='circle' ? node.y - 16 : node.y - 14);
+    label.setAttribute('text-anchor','middle');
+    label.setAttribute('class','node-letter');
+    label.textContent = letter;
+    svg.appendChild(label);
+  });
+
+  // center "Start Here" triangle, flipped vertically (apex pointing down),
+  // drawn last so it renders on top of all lines and node shapes.
+  const triSize = 16;
+  const triangle = document.createElementNS('http://www.w3.org/2000/svg','path');
+  triangle.setAttribute('d', `M${antennaX},${antennaY+triSize} L${antennaX+triSize},${antennaY-triSize} L${antennaX-triSize},${antennaY-triSize} Z`);
+  triangle.setAttribute('fill', '#8a8360');
+  triangle.setAttribute('class','antenna-line');
+  svg.appendChild(triangle);
+}
+buildTree();
+
+function clearTreeHighlights(){
+  Object.keys(NODES).forEach(letter=>{
+    const el = document.getElementById('node-'+letter);
+    el.classList.remove('lit-current','lit-path','lit-wrong');
+  });
+  // remove any in-flight shine dots so a Clear/reset doesn't leave one
+  // stranded mid-travel on the tree
+  svg.querySelectorAll('.shine-dot').forEach(dot => dot.remove());
+  // spark starts fresh from the antenna next time it's needed
+  sparkLastLetter = null;
+}
+// light up the path for a partial/complete code string, current node = brightest
+function highlightPathForCode(code){
+  clearTreeHighlights();
+  for(let i=1;i<=code.length;i++){
+    const partial = code.slice(0,i);
+    const letter = MORSE_TO_LETTER[partial];
+    if(!letter) continue;
+    const el = document.getElementById('node-'+letter);
+    if(!el) continue;
+    if(i === code.length){ el.classList.add('lit-current'); }
+    else { el.classList.add('lit-path'); }
+  }
+}
+function flashWrong(code){
+  const letter = MORSE_TO_LETTER[code];
+  if(letter){
+    const el = document.getElementById('node-'+letter);
+    if(el){
+      el.classList.remove('lit-current','lit-path');
+      el.classList.add('lit-wrong');
+    }
+  }
+}
+
+// Traveling "spark" that chases the player's input: on each tap, a bright
+// dot slides along just the newest branch segment (from wherever the spark
+// last landed to the newly-selected letter), then blinks out right as it
+// arrives — rather than replaying the whole path from the antenna every
+// time. Rides the exact rendered geometry of the tree's own <path>/<line>
+// elements (elbows, jogs, T-junctions included) by sampling real points
+// along it with getPointAtLength() and stepping via requestAnimationFrame —
+// this is used instead of SVG's native <animateMotion>/SMIL, which turned
+// out to jump straight to the endpoint instead of sliding in practice.
+const SHINE_SEGMENT_MS = 160; // duration for the spark to cross one segment
+
+function shineSegmentTo(letter){
+  const lineId = 'line-' + letter;
+  const lineEl = document.getElementById(lineId);
+  if(!lineEl || typeof lineEl.getPointAtLength !== 'function') return;
+
+  const totalLen = lineEl.getTotalLength();
+  const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
+  dot.setAttribute('r', 6);
+  dot.setAttribute('class','shine-dot');
+  svg.appendChild(dot);
+
+  const startTime = performance.now();
+  function step(now){
+    const elapsed = now - startTime;
+    const progress = Math.min(1, elapsed / SHINE_SEGMENT_MS);
+    const pt = lineEl.getPointAtLength(progress * totalLen);
+    dot.setAttribute('cx', pt.x);
+    dot.setAttribute('cy', pt.y);
+    if(progress < 1){
+      requestAnimationFrame(step);
+    } else {
+      // Blink out right as it reaches the letter — a quick fade rather than
+      // lingering lit, so it reads as "arrived and vanished," not "parked."
+      dot.classList.add('shine-blink');
+      setTimeout(()=>{ if(dot.parentNode) dot.parentNode.removeChild(dot); }, 140);
+    }
+  }
+  requestAnimationFrame(step);
+}
+
+// Advances the spark by exactly one step: from wherever it currently is
+// (sparkLastLetter, or the antenna if this is the first symbol of a fresh
+// letter) to the given next letter in the chain.
+function shineChase(nextLetter){
+  shineSegmentTo(nextLetter);
+  sparkLastLetter = nextLetter;
+}
+
+// The spark's position resets back to the antenna (sparkLastLetter = null)
+// inside clearTreeHighlights(), which already runs on every letter
+// confirm/clear/new-round — so the next tap after any of those starts
+// the spark fresh from center instead of continuing from the old letter.
+/* ================= UI HELPERS ================= */
+const currentMorseEl = document.getElementById('current-morse');
+const wordProgressEl = document.getElementById('word-progress');
+const feedbackEl = document.getElementById('feedback');
+const btnClearLetter = document.getElementById('btn-clear-letter');
+const btnSubmitWord = document.getElementById('btn-submit-word');
+const btnRespondWord = document.getElementById('btn-respond-word');
+const streakCountEl = document.getElementById('streak-count');
+const roundCountEl = document.getElementById('round-count');
+
+function renderProgress(){
+  wordProgressEl.innerHTML = '';
+  const slots = [...confirmedLetters];
+  // Only show slots for letters actually confirmed so far — no blank
+  // placeholder for the "next" letter, so players can't see how many
+  // letters are expected until they've submitted enough to know.
+  for(let i=0;i<slots.length; i++){
+    const slot = document.createElement('div');
+    slot.className = 'progress-slot filled';
+    slot.textContent = slots[i];
+    wordProgressEl.appendChild(slot);
+  }
+  // Morse readout: all confirmed letters' codes stay visible (amber), and
+  // only the in-progress letter's taps render in white — this is what
+  // actually differentiates "already locked in" from "still live," rather
+  // than wiping the display the instant a letter auto-confirms. Each
+  // confirmed symbol gets its own span (data-letter-idx/data-sym-idx) so
+  // playback can highlight individual dots/dashes in sync with the beeps,
+  // not just the whole-letter slot.
+  currentMorseEl.innerHTML = '';
+  if(confirmedCodes.length === 0 && !currentLetterCode){
+    currentMorseEl.textContent = '\u00A0';
+  } else {
+    confirmedCodes.forEach((code, letterIdx) => {
+      if(letterIdx > 0) currentMorseEl.appendChild(document.createTextNode(' '));
+      [...code].forEach((sym, symIdx) => {
+        const symSpan = document.createElement('span');
+        symSpan.className = 'morse-sym';
+        symSpan.dataset.letterIdx = letterIdx;
+        symSpan.dataset.symIdx = symIdx;
+        symSpan.textContent = sym;
+        currentMorseEl.appendChild(symSpan);
+      });
+    });
+    if(currentLetterCode){
+      if(confirmedCodes.length) currentMorseEl.appendChild(document.createTextNode(' '));
+      const liveSpan = document.createElement('span');
+      liveSpan.className = 'live-code';
+      liveSpan.textContent = currentLetterCode;
+      currentMorseEl.appendChild(liveSpan);
+    }
+  }
+  const enoughLetters = confirmedLetters.length >= currentLevel;
+  btnSubmitWord.disabled = !enoughLetters;
+  btnRespondWord.disabled = !enoughLetters;
+  btnPlaybackLetters.disabled = confirmedLetters.length === 0;
+}
+
+const resultPopupEl = document.getElementById('result-popup');
+function showResultPopup(text, kind, onEnd){
+  resultPopupEl.classList.remove('pop','correct','wrong');
+  // force reflow so the animation restarts even if triggered back-to-back
+  void resultPopupEl.offsetWidth;
+  resultPopupEl.textContent = text;
+  resultPopupEl.classList.add(kind, 'pop');
+  if(kind === 'correct'){
+    playGoodJobJingle();
+  } else if(kind === 'wrong'){
+    playWrongJingle();
+  }
+  if(onEnd){
+    // End Cue: real animationend event, with a timeout fallback in case it
+    // never fires (e.g. tab backgrounded and animations get throttled)
+    let fired = false;
+    const fire = ()=>{ if(fired) return; fired = true; onEnd(); };
+    resultPopupEl.addEventListener('animationend', fire, { once:true });
+    setTimeout(fire, 1300); // fallback safety net, slightly longer than the 1.1s animation
+  }
+}
+
+// A simple celebratory jingle for a correct answer: 3 ascending notes
+// (a plain major triad — root, major third, fifth) over 0.5s total.
+function playGoodJobJingle(){
+  const ctx = getCtx();
+  const NOTE_DUR = 0.15;
+  const GAP = 0.025;
+  const NOTES = [523.25, 659.25, 783.99]; // C5, E5, G5 — major triad, ascending
+
+  let t = 0;
+  NOTES.forEach(freq => {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, now+t);
+    gain.gain.linearRampToValueAtTime(0.22, now+t+0.008);
+    gain.gain.linearRampToValueAtTime(0, now+t+NOTE_DUR);
+    osc.connect(gain); gain.connect(masterGain);
+    osc.start(now+t); osc.stop(now+t+NOTE_DUR+0.01);
+    t += NOTE_DUR + GAP;
+  });
+}
+
+// A short "disappointed" jingle for a wrong answer: 3 descending notes,
+// mirroring playGoodJobJingle's shape but falling instead of rising, and
+// using a plain sine wave (duller/flatter than the triangle-wave success
+// chime) with a slightly longer, droopier final note for a "womp womp"
+// feel — still quick, same ~0.5s ballpark, nothing punishing.
+function playWrongJingle(){
+  const ctx = getCtx();
+  const GAP = 0.025;
+  const NOTES = [
+    { freq: 392.00, dur: 0.13 },  // G4
+    { freq: 349.23, dur: 0.13 },  // F4
+    { freq: 293.66, dur: 0.22 },  // D4 — held a bit longer, the "womp"
+  ];
+
+  let t = 0;
+  NOTES.forEach(({freq, dur}) => {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, now+t);
+    gain.gain.linearRampToValueAtTime(0.18, now+t+0.008);
+    gain.gain.linearRampToValueAtTime(0, now+t+dur);
+    osc.connect(gain); gain.connect(masterGain);
+    osc.start(now+t); osc.stop(now+t+dur+0.01);
+    t += dur + GAP;
+  });
+}
+
+function resetInputState(){
+  cancelAutoConfirm();
+  hasUserInput = false;
+  currentLetterCode = '';
+  confirmedLetters = [];
+  confirmedCodes = [];
+  clearTreeHighlights();
+  renderProgress();
+  feedbackEl.textContent = '\u00A0';
+  feedbackEl.className = '';
+}
+
+function setPhase(newPhase){
+  phase = newPhase;
+  if(phase === 'decode'){
+    btnSubmitWord.style.display = '';
+    btnRespondWord.style.display = 'none';
+    document.getElementById('btn-skip-respond').style.display = 'none';
+  } else {
+    btnSubmitWord.style.display = 'none';
+    btnRespondWord.style.display = '';
+    document.getElementById('btn-skip-respond').style.display = '';
+  }
+}
+
+/* ================= ROUND FLOW ================= */
+// Two different lesson patterns depending on level:
+//
+// Level 1/2 (single letters / 2-letter words — learning the raw alphabet):
+// "New, Review-previous-new" rolling pattern. Each brand-new letter/word is
+// immediately followed by a review of whichever new one came right before
+// it, then the next new one, then a review of THAT one, and so on:
+//   A B A C B D C E D F E G F ...
+// This keeps exactly one review sandwiched between each pair of new
+// introductions, so nothing is ever shown twice in a row and review always
+// reaches back to the most recently retired "previous new" item.
+//
+// Level 3/4 (shiritori/rhyme practice): no repetition pattern at all — by
+// this point the player already knows the alphabet, so every round is just
+// a fresh random prompt. The "spaced repetition" concept doesn't apply
+// here; the learning goal has shifted to shiritori/rhyme practice instead.
+let previousNewEntry = null; // the last "new" prompt shown, for L1/2's review step
+let pendingReview = null;    // set when the next round should replay previousNewEntry
+let lastResponseLetter = null; // last letter of the player's most recent L3/4 response,
+                                // used to shiritori-chain the NEXT transmission's prompt
+
+// pickRandomPromptForLevel(startLetter) — for Level 3/4, if startLetter is given,
+// prefer a prompt word that actually starts with it (continuing the shiritori
+// chain from the player's last response). If no prompt word in the level's word
+// pool starts with that letter, falls back to a fully random pick rather than
+// getting stuck with no valid next transmission.
+function pickRandomPromptForLevel(startLetter){
+  if(currentLevel === 1){
+    return { prompt: LEVEL1_LETTERS[Math.floor(Math.random()*LEVEL1_LETTERS.length)], group: null };
+  } else if(currentLevel === 2){
+    return { prompt: LEVEL2_WORDS[Math.floor(Math.random()*LEVEL2_WORDS.length)], group: null };
+  } else {
+    const groups = currentLevel === 3 ? RHYME_GROUPS_L3 : RHYME_GROUPS_L4;
+    if(startLetter){
+      // build the list of {prompt, group} candidates that start with the required letter
+      const candidates = [];
+      groups.forEach(group => {
+        group.prompts.forEach(p => {
+          if(p[0] === startLetter) candidates.push({ prompt: p, group });
+        });
+      });
+      if(candidates.length > 0){
+        return candidates[Math.floor(Math.random()*candidates.length)];
+      }
+      // no word in the pool starts with this letter — fall through to random pick
+      // below rather than getting stuck with no valid transmission.
+    }
+    const group = groups[Math.floor(Math.random()*groups.length)];
+    return { prompt: group.prompts[Math.floor(Math.random()*group.prompts.length)], group };
+  }
+}
+
+// Reset the lesson sequence — called on level change or debug restart, since
+// switching word banks mid-cycle would make "review" reference stale words.
+function resetLessonSequence(){
+  previousNewEntry = null;
+  pendingReview = null;
+  lastResponseLetter = null;
+}
+
+function newRound(){
+  round++;
+  roundCountEl.textContent = 'Round ' + round;
+
+  let entry;
+  if(currentLevel === 1 || currentLevel === 2){
+    if(pendingReview){
+      // this round reviews whatever was "new" immediately before the last new one
+      entry = pendingReview;
+      pendingReview = null;
+      logEvent('Round ' + round + ': review (' + entry.prompt + ')');
+    } else {
+      entry = pickRandomPromptForLevel();
+      if(previousNewEntry){
+        pendingReview = previousNewEntry; // queue this up as next round's review
+      }
+      previousNewEntry = entry;
+      logEvent('Round ' + round + ': new (' + entry.prompt + ')');
+    }
+  } else {
+    // Level 3/4: no spaced-repetition pattern — every round is a fresh
+    // prompt, BUT the prompt is now a shiritori continuation of the
+    // player's last response (starts with that word's last letter), so
+    // the transmissions themselves chain shiritori-style round to round.
+    // On the very first round (no prior response yet), lastResponseLetter
+    // is null and pickRandomPromptForLevel() just falls back to a normal
+    // random pick — this is what keeps the game from ever getting stuck
+    // waiting on a response that doesn't exist yet.
+    entry = pickRandomPromptForLevel(lastResponseLetter);
+    lastResponseLetter = null; // consumed — only chains for one round at a time
+    logEvent('Round ' + round + ': fresh prompt (' + entry.prompt + ')');
+  }
+
+  currentPrompt = entry.prompt;
+  currentGroup = entry.group;
+
+  setPhase('decode');
+  resetInputState();
+  resetTransmissionBar();
+  logSession('Transmission: ' + currentPrompt);
+}
+newRound();
+
+function triggerTransmissionPlay(){
+  const playBtn = document.getElementById('btn-play');
+  logEvent('Play tapped, announcing: ' + currentPrompt);
+  playBtn.disabled = true;
+  announceWord(currentPrompt, ()=>{
+    playBtn.disabled = false;
+    logEvent('Announce end cue');
+  });
+}
+document.getElementById('btn-play').addEventListener('click', triggerTransmissionPlay);
+
+/* ---- Tap/Hold input button ---- */
+const btnTap = document.getElementById('btn-tap');
+const AUTO_CONFIRM_PAUSE_MS = 700;
+
+// Sandwich Programming: Start Cue = a symbol is entered (resets the pause timer).
+// Filling = waiting for the pause. End Cue = the pause elapses with no further
+// input, which auto-confirms the current letter (if valid) — this is what
+// replaces the old manual "Confirm Letter" button, so players have to actually
+// learn and rely on real inter-letter pacing rather than pressing a button
+// whenever they feel ready.
+function scheduleAutoConfirm(){
+  if(!hasUserInput) return; // never arm the timer until the player has actually tapped
+  if(autoConfirmTimer) clearTimeout(autoConfirmTimer);
+  autoConfirmTimer = setTimeout(()=>{
+    autoConfirmTimer = null;
+    if(!currentLetterCode) return; // nothing pending — don't touch state
+    const letter = MORSE_TO_LETTER[currentLetterCode];
+    if(letter){
+      confirmedLetters.push(letter);
+      confirmedCodes.push(currentLetterCode);
+      logEvent('Auto-confirmed letter (0.7s pause): ' + letter);
+      currentLetterCode = '';
+      clearTreeHighlights();
+      renderProgress();
+    }
+  }, AUTO_CONFIRM_PAUSE_MS);
+}
+function cancelAutoConfirm(){
+  if(autoConfirmTimer){ clearTimeout(autoConfirmTimer); autoConfirmTimer = null; }
+}
+
+function handlePress(e){
+  e.preventDefault();
+  hasUserInput = true; // first (or any) real press on the beep button — auto-confirm may now arm
+  cancelAutoConfirm(); // new symbol incoming — don't auto-confirm mid-tap
+  holdStart = Date.now();
+  btnTap.classList.add('pressed'); // Start Cue: visual press-highlight begins
+  startLiveTone(); // Start Cue: tone begins the instant the key goes down
+}
+function handleRelease(e){
+  e.preventDefault();
+  btnTap.classList.remove('pressed'); // End Cue: visual press-highlight ends
+  if(holdStart === 0) return; // ignore stray release with no matching press
+  const heldMs = Date.now() - holdStart;
+  holdStart = 0;
+  stopLiveTone(); // End Cue: tone cuts the instant the key comes up
+  const symbol = heldMs >= HOLD_THRESHOLD_MS ? '-' : '.';
+  currentLetterCode += symbol;
+  logEvent('Input symbol: ' + symbol + ' (' + heldMs + 'ms, code now ' + currentLetterCode + ')');
+  const knownLetter = MORSE_TO_LETTER[currentLetterCode];
+  if(knownLetter){
+    highlightPathForCode(currentLetterCode);
+    shineChase(knownLetter); // spark chases from wherever it last was to this letter
+  } else {
+    // still might become valid with more taps unless it's already too long / invalid prefix
+    const isValidPrefix = Object.keys(MORSE).some(l => MORSE[l].startsWith(currentLetterCode));
+    if(isValidPrefix){
+      highlightPathForCode(currentLetterCode);
+      // this partial code isn't a complete letter itself, so there's no
+      // node to chase to yet — the spark just waits at its last position
+      // until the next tap lands on one.
+    } else {
+      flashWrong(currentLetterCode.slice(0,-1)); // fallback flash on last good node
+    }
+  }
+  renderProgress();
+  scheduleAutoConfirm(); // start (or restart) the 0.7s pause-to-confirm window
+}
+btnTap.addEventListener('mousedown', handlePress);
+btnTap.addEventListener('touchstart', handlePress);
+btnTap.addEventListener('mouseup', handleRelease);
+btnTap.addEventListener('touchend', handleRelease);
+// safety net: if the pointer leaves the button while held (finger slides off),
+// treat it as a release so the tone doesn't hang on forever
+btnTap.addEventListener('mouseleave', (e)=>{ if(holdStart !== 0) handleRelease(e); });
+btnTap.addEventListener('touchcancel', (e)=>{ if(holdStart !== 0) handleRelease(e); });
+
+
+document.getElementById('btn-clear-letter').addEventListener('click', ()=>{
+  cancelAutoConfirm();
+  currentLetterCode = '';
+  confirmedLetters = [];
+  confirmedCodes = [];
+  clearTreeHighlights();
+  renderProgress();
+  logEvent('Cleared word input');
+});
+
+document.getElementById('btn-submit-word').addEventListener('click', ()=>{
+  const word = confirmedLetters.join('');
+  logEvent('Decode attempt: ' + word);
+  if(word === currentPrompt){
+    logEvent('Decode result: correct');
+    logSession('  Decode: ' + word + ' (correct)');
+    confirmedLetters = [];
+    confirmedCodes = [];
+    currentLetterCode = '';
+    clearTreeHighlights();
+    renderProgress();
+    if(LEVEL_CONFIG[currentLevel].respond){
+      showResultPopup('Correct!', 'correct');
+      setPhase('respond');
+    } else {
+      streak++;
+      streakCountEl.textContent = streak;
+      showResultPopup('Correct!', 'correct', ()=>{ newRound(); });
+    }
+  } else {
+    showResultPopup('Wrong!', 'wrong');
+    logEvent('Decode result: wrong');
+    logSession('  Decode: ' + word + ' (wrong)');
+    confirmedLetters = [];
+    confirmedCodes = [];
+    currentLetterCode = '';
+    clearTreeHighlights();
+    renderProgress();
+  }
+});
+
+document.getElementById('btn-respond-word').addEventListener('click', ()=>{
+  const word = confirmedLetters.join('');
+  logEvent('Respond attempt: ' + word);
+  // Shiritori is the PRIMARY response type: the response just needs to
+  // START with the prompt word's LAST letter — no curated word list
+  // required, any word that satisfies that single rule counts. Rhyme is
+  // accepted too, but only checked/reported second — if a response
+  // happens to satisfy both (common, since many rhymes also start with
+  // the right letter), it's still credited as shiritori since that's
+  // the primary mode this level is built around.
+  const isShiritori = word.length > 0 && word[0] === currentPrompt[currentPrompt.length-1];
+  const isRhyme = currentGroup.accepted.includes(word);
+  const valid = (isShiritori || isRhyme) && word !== currentPrompt;
+  if(valid){
+    streak++;
+    streakCountEl.textContent = streak;
+    const matchType = isShiritori ? 'shiritori' : 'rhyme';
+    logEvent('Respond result: correct (' + matchType + ')');
+    logSession('  Respond: ' + word + ' (correct, ' + matchType + ')');
+    lastResponseLetter = word[word.length-1]; // next transmission will shiritori-chain from this
+    showResultPopup('Good Job!', 'correct', ()=>{
+      newRound();
+      setTimeout(triggerTransmissionPlay, 600); // auto-play the next transmission after a short hold
+    });
+  } else {
+    showResultPopup('Wrong!', 'wrong');
+    logEvent('Respond result: wrong');
+    logSession('  Respond: ' + word + ' (wrong)');
+    confirmedLetters = [];
+    confirmedCodes = [];
+    currentLetterCode = '';
+    clearTreeHighlights();
+    renderProgress();
+  }
+});
+
+document.getElementById('btn-skip-respond').addEventListener('click', ()=>{
+  logEvent('Skipped respond phase');
+  newRound();
+});
+
+/* ---- Level difficulty selector ---- */
+const LEVEL_DESC = {
+  1: '1 letter · decode only',
+  2: '2 letters · decode only',
+  3: '3 letters · decode + shiritori bonus',
+  4: '4 letters · decode + shiritori bonus'
+};
+document.querySelectorAll('.level-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const level = parseInt(btn.dataset.level, 10);
+    if(level === currentLevel) return;
+    currentLevel = level;
+    document.querySelectorAll('.level-btn').forEach(b=>b.classList.toggle('active', b===btn));
+    document.getElementById('level-select-desc').textContent = LEVEL_DESC[level];
+    logEvent('Level changed to ' + level);
+    streak = 0;
+    streakCountEl.textContent = streak;
+    round = 0;
+    resetLessonSequence();
+    newRound();
+  });
+});
+
+/* ---- Volume cycle button: mute -> quiet -> loud -> mute ---- */
+const VOLUME_CYCLE = ['loud', 'quiet', 'mute'];
+const VOLUME_ICON = { loud: '🔊', quiet: '🔉', mute: '🔇' };
+document.getElementById('btn-volume').addEventListener('click', (e)=>{
+  const idx = VOLUME_CYCLE.indexOf(currentVolumeLevel);
+  const next = VOLUME_CYCLE[(idx + 1) % VOLUME_CYCLE.length];
+  setVolumeLevel(next);
+  e.target.dataset.vol = next;
+  e.target.textContent = VOLUME_ICON[next];
+  logEvent('Volume set to ' + next);
+});
+
+/* ---- Info overlay ---- */
+document.getElementById('btn-info').addEventListener('click', ()=>{
+  document.getElementById('overlay-info').classList.add('show');
+});
+document.getElementById('btn-info-close').addEventListener('click', ()=>{
+  document.getElementById('overlay-info').classList.remove('show');
+});
+
+/* ---- Debug panel ---- */
+const debugPanel = document.getElementById('debug-panel');
+const logsOverlay = document.getElementById('logs-overlay');
+document.getElementById('btn-debug-toggle').addEventListener('click', ()=>{
+  const willShow = !debugPanel.classList.contains('show');
+  debugPanel.classList.toggle('show', willShow);
+  if(!willShow){
+    // toggling Debug off also closes the Logs prompt, if it's open
+    logsOverlay.classList.remove('show');
+  }
+});
+document.getElementById('btn-debug-restart').addEventListener('click', ()=>{
+  streak = 0; round = 0;
+  streakCountEl.textContent = streak;
+  resetLessonSequence();
+  newRound();
+});
+document.getElementById('btn-logs').addEventListener('click', ()=>{
+  const textarea = document.getElementById('logs-textarea');
+  textarea.value = sessionLog.length ? sessionLog.join('\n') : '(no transmissions yet)';
+  logsOverlay.classList.add('show');
+  textarea.focus();
+  textarea.select();
+});
+document.getElementById('btn-logs-close').addEventListener('click', ()=>{
+  logsOverlay.classList.remove('show');
+});
+
+renderProgress();
+</script>
+</body>
+</html>
