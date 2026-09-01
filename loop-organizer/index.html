@@ -1,0 +1,2395 @@
+<!-- CHANGELOG
+v6.14 - Info overlay moved out of #appScaleCanvas entirely (transformed ancestors create a new containing block for position:fixed, so v6.13's fixed positioning was still being scaled/clipped). Now a true top-level sibling of #appScaleFrame, so it covers the real viewport.
+v6.13 - Info overlay backdrop switched from position:absolute (cropped to the scaled game canvas) to position:fixed (covers the real viewport, same trick as the Debug Button anchoring).
+v6.12 - Title row margin-top increased 8px -> 28px to push the whole layout down 20px from the screen edge.
+v6.11 - centerQueue width shrunk 10% overall (calc((37% + 20px) * 0.9)).
+v6.10 - centerQueue widened by 10px on each side (width: calc(37% + 20px)).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Organization Loop v6.14</title>
+<style>
+  :root{
+    --bg:#dce8d2;
+    --panel:#171a1f;
+    --track:#2b2f34;
+    --track2:#14171a;
+    --ink:#263238;
+    --shadow:rgba(35,55,35,.18);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink)}
+  body{display:flex;justify-content:center;min-height:100vh}
+  button{font:inherit}
+  #game{
+    width:min(100vw,520px);
+    min-height:100vh;
+    padding:8px 8px 12px;
+    display:flex;
+    flex-direction:column;
+    gap:5px;
+    user-select:none;
+    touch-action:manipulation;
+  }
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+  }
+  .title{font-weight:900;font-size:20px;letter-spacing:.3px}
+  .pill{
+    background:rgba(255,255,255,.68);border:1px solid rgba(0,0,0,.08);
+    border-radius:999px;padding:7px 11px;font-weight:800;font-size:13px;
+  }
+  .actions{display:flex;gap:7px}
+  .iconbtn{
+    min-width:42px;height:42px;border:0;border-radius:13px;
+    background:rgba(255,255,255,.75);box-shadow:0 2px 7px var(--shadow);
+    font-weight:900;font-size:18px;color:#40504a;
+  }
+  #boardWrap{
+    flex:1;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    min-height:540px;
+  }
+  #board{
+    position:relative;
+    width:100%;
+    height:565px;
+    max-height:calc(100vw * 1.28);
+    min-height:520px;
+  }
+  .rackcol{
+    position:absolute;top:4px;bottom:4px;width:32%;
+    display:flex;flex-direction:column;justify-content:space-between;gap:2px;
+  }
+  #leftRacks{left:0}
+  #rightRacks{right:0}
+  .rack{
+    position:relative;
+    height:39px;
+    border-radius:8px;
+    padding:4px;
+    display:grid;
+    grid-template-columns:repeat(5,1fr);
+    gap:3px;
+    align-items:center;
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.12),0 2px 4px var(--shadow);
+    overflow:hidden;
+    border:0;
+    width:100%;
+    cursor:pointer;
+  }
+  .rack::after{
+    content:"";
+    position:absolute;
+    top:50%;transform:translateY(-50%);
+    width:8px;height:13px;border-radius:3px;
+    background:#4c514f;box-shadow:inset 0 0 0 2px #252927;
+  }
+  #leftRacks .rack::after{right:-3px}
+  #rightRacks .rack::after{left:-3px}
+  .rack.empty{opacity:1}
+  .slot{
+    aspect-ratio:1;border-radius:5px;background:rgba(0,0,0,.08);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .block{
+    width:100%;height:100%;border-radius:5px;
+    box-shadow:inset 0 -2px 0 rgba(0,0,0,.13),inset 0 2px 0 rgba(255,255,255,.22),0 1px 2px rgba(0,0,0,.18);
+    position:relative;
+  }
+  .block::after{
+    content:"";
+    position:absolute;left:26%;right:26%;top:24%;height:18%;
+    background:rgba(255,255,255,.27);border-radius:999px;
+  }
+  .c-pink{background:#ff82a8}
+  .c-blue{background:#3488da}
+  .c-orange{background:#ef8d2f}
+  .c-green{background:#31aa68}
+  .c-purple{background:#8b45b8}
+  .c-yellow{background:#f0c94d}
+  .r-pink{background:#df628b}
+  .r-blue{background:#2b83bd}
+  .r-orange{background:#df8b2e}
+  .r-green{background:#25a25f}
+  .r-purple{background:#8542aa}
+  .r-yellow{background:#d9af35}
+
+  #loopFrame{
+    position:absolute;
+    left:37%;right:37%;top:-1.5%;bottom:-1.5%;
+    border-radius:20px;
+    background:#171a1f;
+    box-shadow:inset 0 0 0 3px rgba(0,0,0,.38),0 3px 8px var(--shadow);
+  }
+  #loopFrame::before{
+    content:"";
+    position:absolute;left:13%;right:13%;top:3%;bottom:3%;
+    border-radius:12px;background:#24282d;
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.12);
+  }
+  #centerQueue{
+    position:absolute;
+    width:calc((37% + 20px) * 0.9);
+    left:50%;transform:translateX(-50%);
+    top:44px;bottom:44px;
+    background:#20242a;
+    border-radius:7px;
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.30);
+    overflow:hidden;
+    display:flex;
+    flex-direction:column-reverse;
+    justify-content:flex-start;
+    gap:2px;
+    padding:4px;
+    pointer-events:none;
+  }
+  .queueCell{
+    width:100%;
+    min-height:0;
+    flex:1 1 0;
+    border-radius:3px;
+    background:#3a4047;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);
+  }
+  .queueCell.occupied{
+    background:#eef2f5;
+    box-shadow:inset 0 -2px rgba(0,0,0,.12);
+  }
+  #belt{
+    position:absolute;inset:0;pointer-events:none;
+  }
+  .beltPiece{
+    position:absolute;
+    left:0;
+    top:0;
+    width:20px;
+    height:20px;
+    border-radius:6px;
+    transform:translate3d(0,0,0) translate(-50%,-50%);
+    will-change:transform;
+    backface-visibility:hidden;
+    box-shadow:inset 0 -2px 0 rgba(0,0,0,.15),0 1px 4px rgba(0,0,0,.22);
+  }
+  .beltPiece.pop{transform:translate(-50%,-50%) scale(1.7);opacity:0}
+  .flyingPiece{position:fixed;z-index:9999;width:20px;height:20px;border-radius:6px;pointer-events:none;box-shadow:inset 0 -2px 0 rgba(0,0,0,.15),0 3px 8px rgba(0,0,0,.28);transition:none}
+  .hint{
+    text-align:center;
+    font-size:13px;color:#4b5f56;
+    min-height:20px;font-weight:700;
+  }
+  #message{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);
+    width:min(78%,290px);
+    border-radius:19px;padding:22px 18px;
+    background:rgba(255,255,255,.95);
+    text-align:center;box-shadow:0 10px 34px rgba(0,0,0,.22);
+    opacity:0;pointer-events:none;transition:.22s ease;
+    z-index:20;
+  }
+  #message.show{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto}
+  #message h2{margin:0 0 8px;font-size:27px}
+  #message p{margin:0 0 15px;color:#5c6864}
+  #message button{
+    border:0;border-radius:12px;padding:12px 18px;background:#596fc6;color:white;font-weight:900
+  }
+  @media(max-width:390px){
+    #board{height:535px;min-height:500px}
+    .rack{height:36px;padding:3px;gap:2px}
+    .beltPiece{width:18px;height:18px}
+  }
+
+/* Completed cubby sealing sequence */
+.rack.sealed-rack{position:relative;overflow:visible}
+.rack-seal{
+  position:absolute;
+  inset:-4px;
+  pointer-events:none;
+  z-index:30;
+  overflow:visible;
+}
+.rack-seal .strap{
+  position:absolute;
+  z-index:3;
+  background:linear-gradient(90deg,#45484e,#777b82 48%,#3e4146);
+  border:1px solid rgba(15,18,22,.7);
+  border-radius:3px;
+  box-shadow:0 1px 2px rgba(0,0,0,.45);
+  opacity:0;
+  transform-origin:center;
+}
+.rack-seal .strap.h{
+  left:50%;
+  width:7px;
+  height:14px;
+  transform:translateX(-50%) scaleY(.15);
+}
+.rack-seal .strap.h.top{top:-12px}
+.rack-seal .strap.h.bottom{bottom:-12px}
+.rack-seal .strap.v{
+  top:50%;
+  width:14px;
+  height:7px;
+  transform:translateY(-50%) scaleX(.15);
+}
+.rack-seal .strap.v.left{left:-12px}
+.rack-seal .strap.v.right{right:-12px}
+
+.rack-seal.straps-out .strap{opacity:1}
+.rack-seal.straps-out .strap.h{animation:strapOutY 150ms cubic-bezier(.2,.8,.2,1) forwards}
+.rack-seal.straps-out .strap.v{animation:strapOutX 150ms cubic-bezier(.2,.8,.2,1) forwards}
+.rack-seal.fold .strap.top{animation:strapFoldTop 150ms ease-in forwards}
+.rack-seal.fold .strap.bottom{animation:strapFoldBottom 150ms ease-in forwards}
+.rack-seal.fold .strap.left{animation:strapFoldLeft 150ms ease-in forwards}
+.rack-seal.fold .strap.right{animation:strapFoldRight 150ms ease-in forwards}
+.rack-seal.tight .strap{
+  opacity:1;
+  transition:transform 90ms cubic-bezier(.15,1.4,.3,1);
+}
+.rack-seal.tight .strap.top{transform:translate(-50%,14px) scaleY(.82)}
+.rack-seal.tight .strap.bottom{transform:translate(-50%,-14px) scaleY(.82)}
+.rack-seal.tight .strap.left{transform:translate(14px,-50%) scaleX(.82)}
+.rack-seal.tight .strap.right{transform:translate(-14px,-50%) scaleX(.82)}
+
+.rack-seal .glass{
+  position:absolute;
+  inset:3px;
+  border-radius:7px;
+  background:
+    linear-gradient(115deg,rgba(235,238,242,.16),rgba(145,150,156,.16) 42%,rgba(70,74,80,.28)),
+    rgba(105,110,118,.38);
+  border:2px solid rgba(48,52,58,.92);
+  box-shadow:inset 0 0 9px rgba(255,255,255,.10),0 2px 4px rgba(0,0,0,.28);
+  z-index:1;
+  backdrop-filter:blur(1px);
+  opacity:0;
+  transform:translateX(115%);
+}
+.rack-seal.glass-in .glass{
+  animation:glassSlide 230ms cubic-bezier(.18,.72,.22,1) forwards;
+}
+.rack-seal .glass-shine{
+  position:absolute;
+  left:12%;
+  top:24%;
+  width:76%;
+  height:2px;
+  border-radius:2px;
+  background:rgba(255,255,255,.38);
+  transform:rotate(-6deg);
+  transform-origin:center;
+  box-shadow:0 1px 0 rgba(255,255,255,.07);
+}
+
+
+.rack-seal .smoke{
+  position:absolute;
+  z-index:4;
+  right:-4px;
+  bottom:5px;
+  width:10px;
+  height:10px;
+  opacity:0;
+}
+.rack-seal .smoke i{
+  position:absolute;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:rgba(205,210,215,.65);
+  filter:blur(.4px);
+}
+.rack-seal.poof .smoke{opacity:1}
+.rack-seal.poof .smoke i:nth-child(1){animation:sealPoof1 320ms ease-out forwards}
+.rack-seal.poof .smoke i:nth-child(2){animation:sealPoof2 350ms ease-out 20ms forwards}
+.rack-seal.poof .smoke i:nth-child(3){animation:sealPoof3 300ms ease-out 35ms forwards}
+
+@keyframes strapOutY{
+  from{opacity:0;transform:translateX(-50%) scaleY(.1)}
+  to{opacity:1;transform:translateX(-50%) scaleY(1)}
+}
+@keyframes strapOutX{
+  from{opacity:0;transform:translateY(-50%) scaleX(.1)}
+  to{opacity:1;transform:translateY(-50%) scaleX(1)}
+}
+@keyframes strapFoldTop{
+  from{opacity:1;transform:translateX(-50%) scaleY(1)}
+  to{opacity:1;transform:translate(-50%,14px) rotateX(68deg) scaleY(.9)}
+}
+@keyframes strapFoldBottom{
+  from{opacity:1;transform:translateX(-50%) scaleY(1)}
+  to{opacity:1;transform:translate(-50%,-14px) rotateX(-68deg) scaleY(.9)}
+}
+@keyframes strapFoldLeft{
+  from{opacity:1;transform:translateY(-50%) scaleX(1)}
+  to{opacity:1;transform:translate(14px,-50%) rotateY(-68deg) scaleX(.9)}
+}
+@keyframes strapFoldRight{
+  from{opacity:1;transform:translateY(-50%) scaleX(1)}
+  to{opacity:1;transform:translate(-14px,-50%) rotateY(68deg) scaleX(.9)}
+}
+@keyframes glassSlide{
+  0%{opacity:.15;transform:translateX(115%)}
+  72%{opacity:.92;transform:translateX(-4%)}
+  100%{opacity:1;transform:translateX(0)}
+}
+@keyframes sealPoof1{
+  0%{opacity:.8;transform:translate(0,0) scale(.65)}
+  100%{opacity:0;transform:translate(13px,-7px) scale(1.65)}
+}
+@keyframes sealPoof2{
+  0%{opacity:.75;transform:translate(1px,1px) scale(.5)}
+  100%{opacity:0;transform:translate(18px,1px) scale(1.35)}
+}
+@keyframes sealPoof3{
+  0%{opacity:.7;transform:translate(0,0) scale(.55)}
+  100%{opacity:0;transform:translate(11px,8px) scale(1.45)}
+}
+@media (prefers-reduced-motion:reduce){
+  .rack-seal *{animation-duration:1ms!important;transition-duration:1ms!important}
+}
+
+
+.rack-seal.seal-static .strap{opacity:1;animation:none!important;transition:none!important}
+.rack-seal.seal-static .strap.top{transform:translate(-50%,14px) scaleY(.82)}
+.rack-seal.seal-static .strap.bottom{transform:translate(-50%,-14px) scaleY(.82)}
+.rack-seal.seal-static .strap.left{transform:translate(14px,-50%) scaleX(.82)}
+.rack-seal.seal-static .strap.right{transform:translate(-14px,-50%) scaleX(.82)}
+.rack-seal.seal-static .glass{
+  opacity:1;
+  transform:translateX(0);
+  animation:none!important;
+}
+.rack-seal.seal-static .smoke{display:none}
+
+
+/* Generator-startup finale */
+#loopFrame.finale-running{
+  pointer-events:none;
+}
+#centerQueue.finale-charge .queueCell{
+  background:#3a4047;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);
+  transition:background 90ms ease,box-shadow 90ms ease,transform 90ms ease;
+}
+#centerQueue.finale-charge .queueCell.finale-on{
+  background:#45d66b;
+  box-shadow:
+    inset 0 -2px 0 rgba(0,0,0,.16),
+    inset 0 0 0 1px rgba(255,255,255,.28),
+    0 0 7px rgba(69,214,107,.52);
+  transform:scaleX(.94);
+}
+
+#loopFrame.finale-flash{
+  animation:generatorFlash 1150ms ease-out forwards;
+}
+#loopFrame.finale-flash::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:45;
+  border-radius:20px;
+  pointer-events:none;
+  background:rgba(255,255,255,0);
+  animation:generatorWhitePulse 1150ms ease-out forwards;
+}
+
+#loopFrame.finale-circulation{
+  /* Machinery stays visible while circulation starts. */
+}
+#loopFrame.finale-circulation::before{
+  opacity:1;
+}
+#loopFrame.finale-circulation #centerQueue{
+  opacity:1;
+}
+#loopFrame.finale-circulation #belt{
+  opacity:1;
+}
+
+#circulationLoop{
+  position:absolute;
+  inset:0;
+  z-index:50;
+  pointer-events:none;
+  opacity:0;
+  transition:opacity 180ms ease;
+}
+#circulationLoop.show{
+  opacity:1;
+}
+.circulationDot{
+  position:absolute;
+  width:14px;
+  height:14px;
+  border-radius:50%;
+  border:2px solid rgba(255,255,255,.94);
+  background:transparent;
+  box-shadow:0 0 5px rgba(255,255,255,.18);
+  transform:translate(-50%,-50%);
+}
+
+@keyframes generatorWhitePulse{
+  0%{background:rgba(255,255,255,0)}
+  12%{background:rgba(255,255,255,.98)}
+  100%{background:rgba(255,255,255,0)}
+}
+@keyframes generatorFlash{
+  0%{filter:brightness(1)}
+  12%{filter:brightness(2.6)}
+  100%{filter:brightness(1)}
+}
+
+
+/* Keep the win window above the conveyor, circulation markers, seals, and all finale effects. */
+#message{
+  z-index:10000 !important;
+}
+#message.show{
+  z-index:10000 !important;
+}
+
+
+/* Thin darker edge around colored game blocks, derived from each block's own color. */
+.piece,
+.block,
+.rack .item,
+.slot .item,
+.flying-piece{
+  box-shadow:
+    inset 0 0 0 1px rgba(0,0,0,.32),
+    0 1px 1px rgba(0,0,0,.18);
+}
+
+
+/* Debug text stays hidden until the Logs panel is explicitly opened. */
+#debugLive,
+.debug-live,
+.debug-strip,
+#debugStrip{
+  display:none !important;
+}
+#logPanel:not(.show),
+.logs-panel:not(.show){
+  visibility:hidden;
+  opacity:0;
+  pointer-events:none;
+}
+#logPanel.show,
+.logs-panel.show{
+  visibility:visible;
+  opacity:1;
+  pointer-events:auto;
+}
+
+
+html, body { background:#24282d !important; }
+
+:root { --board-max-w:min(94vw,520px); }
+
+.standard-title-row,
+.standard-home-row,
+.game-shell {
+  width:min(100%,var(--board-max-w));
+  margin-left:auto;
+  margin-right:auto;
+}
+
+.standard-title-row{
+  margin-bottom:8px;
+  display:grid;
+  grid-template-columns:26px 1fr 26px;
+  align-items:center;
+}
+.standard-title-row h1{
+  grid-column:2;
+  margin:0;
+  text-align:center;
+}
+.standard-info{
+  grid-column:3;
+  width:26px;
+  height:26px;
+  padding:0;
+  border-radius:50%;
+  border:2px solid #645394;
+  background:transparent;
+  color:#645394;
+  font-weight:700;
+  line-height:22px;
+}
+.standard-home-row{
+  margin-top:10px;
+  display:flex;
+  justify-content:center;
+}
+.standard-home{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:36px;
+  padding:0 18px;
+  border:2px solid #645394;
+  border-radius:10px;
+  background:transparent;
+  color:#645394;
+  text-decoration:none;
+  font-weight:700;
+}
+.debug-controls{
+  position:fixed;
+  right:10px;
+  bottom:10px;
+  z-index:12000;
+  display:flex;
+  gap:6px;
+}
+.debug-controls button{
+  border:2px solid #645394;
+  border-radius:9px;
+  background:rgba(0,0,0,.82);
+  color:#645394;
+  padding:6px 10px;
+  font-weight:700;
+}
+
+
+/* v1.1 standard-layout conflict fixes */
+html,body{width:100%;min-height:100%;}
+body{
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  justify-content:flex-start !important;
+  min-height:100vh;
+  overflow-x:hidden;
+  background:#24282d !important;
+}
+.standard-title-row{
+  flex:0 0 auto;
+  box-sizing:border-box;
+  margin-top:28px;
+}
+.game-shell{
+  flex:0 0 auto;
+  box-sizing:border-box;
+}
+#game{
+  width:100% !important;
+  min-height:0 !important;
+  box-sizing:border-box;
+  padding:0 8px 8px;
+}
+.topbar{
+  justify-content:center;
+}
+.topbar > div:first-child{
+  width:100%;
+  display:flex;
+  justify-content:center;
+}
+.topbar .title,
+.topbar .actions{
+  display:none !important;
+}
+#boardWrap{
+  flex:none !important;
+  min-height:0 !important;
+  width:100%;
+}
+#board{
+  width:100% !important;
+  height:auto !important;
+  aspect-ratio:520 / 565;
+  min-height:0 !important;
+  max-height:none !important;
+}
+.standard-home-row{
+  flex:0 0 auto;
+  margin-bottom:8px;
+}
+#debugStrip{display:none !important;}
+
+
+/* v1.2 mobile stabilization */
+.standard-title-row,
+.game-shell,
+.standard-home-row{
+  max-width:520px;
+}
+#game{
+  margin:0 auto;
+}
+.topbar{
+  width:100%;
+}
+#status{
+  margin:0 auto;
+}
+
+
+.standard-title-row h1{
+  color:#fff !important;
+}
+.standard-action-row{
+  width:min(100%,var(--board-max-w));
+  margin:10px auto 0;
+  display:flex;
+  justify-content:center;
+  gap:10px;
+}
+.standard-action-row .standard-action{
+  min-width:120px;
+  min-height:36px;
+  padding:0 18px;
+  border:2px solid #645394;
+  border-radius:10px;
+  background:transparent;
+  color:#645394;
+  font-weight:700;
+}
+
+
+/* Restart/new-game board wipe: a thick white shimmer travels bottom to top. */
+.game-shell{
+  position:relative;
+}
+.restart-shimmer{
+  position:absolute;
+  left:-2%;
+  width:104%;
+  height:34px;
+  bottom:-42px;
+  z-index:9500;
+  pointer-events:none;
+  opacity:0;
+  border-radius:50%;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(255,255,255,0) 0%,
+      rgba(255,255,255,.55) 18%,
+      rgba(255,255,255,1) 44%,
+      rgba(255,255,255,1) 56%,
+      rgba(255,255,255,.55) 82%,
+      rgba(255,255,255,0) 100%
+    );
+  filter:blur(1px);
+  box-shadow:
+    0 0 10px rgba(255,255,255,.72),
+    0 0 20px rgba(255,255,255,.28);
+}
+.restart-shimmer.run{
+  animation:restartShimmerUp 560ms cubic-bezier(.18,.76,.2,1) forwards;
+}
+@keyframes restartShimmerUp{
+  0%{
+    bottom:-42px;
+    opacity:0;
+    transform:scaleY(.72);
+  }
+  9%{
+    opacity:1;
+  }
+  82%{
+    opacity:1;
+  }
+  100%{
+    bottom:calc(100% + 20px);
+    opacity:0;
+    transform:scaleY(.9);
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  .restart-shimmer.run{
+    animation-duration:1ms!important;
+  }
+}
+
+
+.info-window{
+  position:fixed;
+  inset:0;
+  z-index:9000;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:18px;
+  background:rgba(0,0,0,.48);
+  pointer-events:auto;
+}
+.info-window.show{ display:flex; }
+.info-card{
+  width:min(88%,320px);
+  padding:16px 18px;
+  border:2px solid #645394;
+  border-radius:14px;
+  background:#1d2026;
+  box-shadow:0 8px 24px rgba(0,0,0,.38);
+}
+.info-text{
+  color:#fff;
+  text-align:center;
+  font-size:14px;
+  line-height:1.45;
+  font-weight:600;
+}
+
+
+.game-toast{
+  position:absolute;
+  left:50%;
+  bottom:74px;
+  transform:translateX(-50%) translateY(6px);
+  z-index:9200;
+  max-width:82%;
+  padding:7px 11px;
+  border-radius:9px;
+  background:rgba(20,22,27,.92);
+  color:#fff;
+  font-size:12px;
+  font-weight:700;
+  text-align:center;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .15s ease,transform .15s ease;
+}
+.game-toast.show{
+  opacity:1;
+  transform:translateX(-50%) translateY(0);
+}
+
+
+/* Extra breathing room between the title row and game board. */
+.standard-title-row{
+  margin-bottom:calc(1em + 60px) !important;
+}
+
+/* v4.6: one fixed design canvas, viewport-fitted as a complete UI. */
+:root{
+  --app-scale:1;
+}
+#appScaleFrame{
+  position:relative;
+  flex:0 0 auto;
+  margin-left:auto;
+  margin-right:auto;
+  overflow:visible;
+}
+#appScaleCanvas{
+  position:absolute;
+  left:0;
+  top:0;
+  width:520px;
+  transform-origin:top left;
+  transform:scale(var(--app-scale));
+}
+#appScaleCanvas .standard-title-row,
+#appScaleCanvas .standard-home-row,
+#appScaleCanvas .standard-action-row,
+#appScaleCanvas .game-shell{
+  width:520px !important;
+  max-width:520px !important;
+}
+#boardWrap{
+  position:relative;
+  width:520px !important;
+  height:650px !important;
+  margin:0 auto;
+  overflow:visible;
+  flex:none !important;
+}
+#board{
+  position:absolute !important;
+  left:50%;
+  top:0;
+  width:520px !important;
+  height:650px !important;
+  min-height:650px !important;
+  max-height:650px !important;
+  aspect-ratio:auto !important;
+  transform-origin:top center;
+  transform:translateX(-50%) translateY(-30px);
+}
+.rackcol{
+  top:8px !important;
+  bottom:8px !important;
+  gap:8px !important;
+}
+.rack{
+  height:36px !important;
+  flex:0 0 36px;
+}
+
+
+/* v3.1: full-lane pressure-release failure sequence. */
+#centerQueue.deadlock-warning .queueCell.occupied{
+  transition:background 1800ms ease, box-shadow 1800ms ease, transform 1800ms ease;
+  background:#c7474f;
+  box-shadow:
+    inset 0 -2px 0 rgba(0,0,0,.18),
+    inset 0 0 0 1px rgba(255,255,255,.10),
+    0 0 5px rgba(199,71,79,.18);
+}
+.pressure-poof{
+  position:absolute;
+  top:50%;
+  width:8px;
+  height:8px;
+  z-index:80;
+  pointer-events:none;
+  transform:translateY(-50%);
+}
+#leftRacks .pressure-poof{right:-5px;}
+#rightRacks .pressure-poof{left:-5px;}
+.pressure-poof i{
+  position:absolute;
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  background:rgba(205,210,215,.72);
+  opacity:0;
+  filter:blur(.35px);
+}
+#leftRacks .pressure-poof i:nth-child(1){animation:pressurePoofRight1 470ms ease-out forwards;}
+#leftRacks .pressure-poof i:nth-child(2){animation:pressurePoofRight2 500ms ease-out 18ms forwards;}
+#leftRacks .pressure-poof i:nth-child(3){animation:pressurePoofRight3 440ms ease-out 34ms forwards;}
+#rightRacks .pressure-poof i:nth-child(1){animation:pressurePoofLeft1 470ms ease-out forwards;}
+#rightRacks .pressure-poof i:nth-child(2){animation:pressurePoofLeft2 500ms ease-out 18ms forwards;}
+#rightRacks .pressure-poof i:nth-child(3){animation:pressurePoofLeft3 440ms ease-out 34ms forwards;}
+@keyframes pressurePoofRight1{0%{opacity:.88;transform:translate(0,-2px) scale(.55)}100%{opacity:0;transform:translate(20px,-9px) scale(1.8)}}
+@keyframes pressurePoofRight2{0%{opacity:.8;transform:translate(0,0) scale(.48)}100%{opacity:0;transform:translate(25px,1px) scale(1.55)}}
+@keyframes pressurePoofRight3{0%{opacity:.76;transform:translate(0,2px) scale(.5)}100%{opacity:0;transform:translate(18px,10px) scale(1.7)}}
+@keyframes pressurePoofLeft1{0%{opacity:.88;transform:translate(0,-2px) scale(.55)}100%{opacity:0;transform:translate(-20px,-9px) scale(1.8)}}
+@keyframes pressurePoofLeft2{0%{opacity:.8;transform:translate(0,0) scale(.48)}100%{opacity:0;transform:translate(-25px,1px) scale(1.55)}}
+@keyframes pressurePoofLeft3{0%{opacity:.76;transform:translate(0,2px) scale(.5)}100%{opacity:0;transform:translate(-18px,10px) scale(1.7)}}
+.standard-action.deadlock-pulse{
+  animation:deadlockRestartPulse 1900ms ease-in-out infinite;
+}
+@keyframes deadlockRestartPulse{
+  0%,100%{transform:scale(1);box-shadow:0 0 0 rgba(100,83,148,0);}
+  50%{transform:scale(1.025);box-shadow:0 0 9px rgba(100,83,148,.26);}
+}
+@media (prefers-reduced-motion:reduce){
+  #centerQueue.deadlock-warning .queueCell.occupied{transition-duration:1ms!important;}
+  .pressure-poof i,.standard-action.deadlock-pulse{animation-duration:1ms!important;}
+}
+
+
+/* v3.1 failure visual hardening */
+#centerQueue.deadlock-warning .queueCell,
+#centerQueue.deadlock-warning .queueCell.occupied{
+  background:#c7474f !important;
+  box-shadow:
+    inset 0 -2px 0 rgba(0,0,0,.18),
+    inset 0 0 0 1px rgba(255,255,255,.10),
+    0 0 7px rgba(199,71,79,.24) !important;
+  transition:background-color 1800ms ease, background 1800ms ease, box-shadow 1800ms ease !important;
+}
+#board.pressure-release .rack{
+  overflow:visible !important;
+}
+
+
+.pressure-poof.poof-right i:nth-child(1){animation:pressurePoofRight1 470ms ease-out forwards;}
+.pressure-poof.poof-right i:nth-child(2){animation:pressurePoofRight2 500ms ease-out 18ms forwards;}
+.pressure-poof.poof-right i:nth-child(3){animation:pressurePoofRight3 440ms ease-out 34ms forwards;}
+.pressure-poof.poof-left i:nth-child(1){animation:pressurePoofLeft1 470ms ease-out forwards;}
+.pressure-poof.poof-left i:nth-child(2){animation:pressurePoofLeft2 500ms ease-out 18ms forwards;}
+.pressure-poof.poof-left i:nth-child(3){animation:pressurePoofLeft3 440ms ease-out 34ms forwards;}
+
+
+/* v3.2: larger two-stage pressure blast + highlighted Restart pulse. */
+.pressure-poof{
+  width:24px !important;
+  height:24px !important;
+  overflow:visible;
+  opacity:1;
+  animation:pressureCloudLife 2000ms linear forwards;
+}
+.pressure-poof i{
+  width:22px !important;
+  height:22px !important;
+  background:rgba(215,220,225,.78) !important;
+  filter:blur(1.2px) !important;
+  opacity:0;
+  box-shadow:0 0 10px rgba(205,210,215,.18);
+}
+
+/* The cloud keeps building for the first second, then the whole cloud clears. */
+@keyframes pressureCloudLife{
+  0%,50%{opacity:1;}
+  100%{opacity:0;}
+}
+
+.pressure-poof.poof-right i:nth-child(1){animation:bigPoofR1 1000ms ease-out 0ms forwards;}
+.pressure-poof.poof-right i:nth-child(2){animation:bigPoofR2 920ms ease-out 90ms forwards;}
+.pressure-poof.poof-right i:nth-child(3){animation:bigPoofR3 980ms ease-out 180ms forwards;}
+.pressure-poof.poof-right i:nth-child(4){animation:bigPoofR4 900ms ease-out 270ms forwards;}
+.pressure-poof.poof-right i:nth-child(5){animation:bigPoofR5 960ms ease-out 360ms forwards;}
+.pressure-poof.poof-right i:nth-child(6){animation:bigPoofR6 880ms ease-out 450ms forwards;}
+.pressure-poof.poof-right i:nth-child(7){animation:bigPoofR7 840ms ease-out 560ms forwards;}
+.pressure-poof.poof-right i:nth-child(8){animation:bigPoofR8 780ms ease-out 690ms forwards;}
+.pressure-poof.poof-right i:nth-child(9){animation:bigPoofR9 700ms ease-out 820ms forwards;}
+
+.pressure-poof.poof-left i:nth-child(1){animation:bigPoofL1 1000ms ease-out 0ms forwards;}
+.pressure-poof.poof-left i:nth-child(2){animation:bigPoofL2 920ms ease-out 90ms forwards;}
+.pressure-poof.poof-left i:nth-child(3){animation:bigPoofL3 980ms ease-out 180ms forwards;}
+.pressure-poof.poof-left i:nth-child(4){animation:bigPoofL4 900ms ease-out 270ms forwards;}
+.pressure-poof.poof-left i:nth-child(5){animation:bigPoofL5 960ms ease-out 360ms forwards;}
+.pressure-poof.poof-left i:nth-child(6){animation:bigPoofL6 880ms ease-out 450ms forwards;}
+.pressure-poof.poof-left i:nth-child(7){animation:bigPoofL7 840ms ease-out 560ms forwards;}
+.pressure-poof.poof-left i:nth-child(8){animation:bigPoofL8 780ms ease-out 690ms forwards;}
+.pressure-poof.poof-left i:nth-child(9){animation:bigPoofL9 700ms ease-out 820ms forwards;}
+
+@keyframes bigPoofR1{0%{opacity:.9;transform:translate(0,-3px) scale(.55)}100%{opacity:.72;transform:translate(64px,-24px) scale(2.6)}}
+@keyframes bigPoofR2{0%{opacity:.88;transform:translate(0,1px) scale(.5)}100%{opacity:.68;transform:translate(78px,-9px) scale(2.25)}}
+@keyframes bigPoofR3{0%{opacity:.86;transform:translate(0,4px) scale(.5)}100%{opacity:.66;transform:translate(67px,19px) scale(2.7)}}
+@keyframes bigPoofR4{0%{opacity:.82;transform:translate(0,-1px) scale(.45)}100%{opacity:.62;transform:translate(48px,-34px) scale(2.15)}}
+@keyframes bigPoofR5{0%{opacity:.84;transform:translate(0,2px) scale(.48)}100%{opacity:.64;transform:translate(86px,8px) scale(2.45)}}
+@keyframes bigPoofR6{0%{opacity:.8;transform:translate(0,0) scale(.45)}100%{opacity:.58;transform:translate(57px,31px) scale(2.2)}}
+@keyframes bigPoofR7{0%{opacity:.78;transform:translate(0,-2px) scale(.42)}100%{opacity:.54;transform:translate(72px,-28px) scale(2.1)}}
+@keyframes bigPoofR8{0%{opacity:.76;transform:translate(0,2px) scale(.4)}100%{opacity:.5;transform:translate(91px,-2px) scale(1.95)}}
+@keyframes bigPoofR9{0%{opacity:.72;transform:translate(0,1px) scale(.4)}100%{opacity:.46;transform:translate(61px,25px) scale(1.85)}}
+
+@keyframes bigPoofL1{0%{opacity:.9;transform:translate(0,-3px) scale(.55)}100%{opacity:.72;transform:translate(-64px,-24px) scale(2.6)}}
+@keyframes bigPoofL2{0%{opacity:.88;transform:translate(0,1px) scale(.5)}100%{opacity:.68;transform:translate(-78px,-9px) scale(2.25)}}
+@keyframes bigPoofL3{0%{opacity:.86;transform:translate(0,4px) scale(.5)}100%{opacity:.66;transform:translate(-67px,19px) scale(2.7)}}
+@keyframes bigPoofL4{0%{opacity:.82;transform:translate(0,-1px) scale(.45)}100%{opacity:.62;transform:translate(-48px,-34px) scale(2.15)}}
+@keyframes bigPoofL5{0%{opacity:.84;transform:translate(0,2px) scale(.48)}100%{opacity:.64;transform:translate(-86px,8px) scale(2.45)}}
+@keyframes bigPoofL6{0%{opacity:.8;transform:translate(0,0) scale(.45)}100%{opacity:.58;transform:translate(-57px,31px) scale(2.2)}}
+@keyframes bigPoofL7{0%{opacity:.78;transform:translate(0,-2px) scale(.42)}100%{opacity:.54;transform:translate(-72px,-28px) scale(2.1)}}
+@keyframes bigPoofL8{0%{opacity:.76;transform:translate(0,2px) scale(.4)}100%{opacity:.5;transform:translate(-91px,-2px) scale(1.95)}}
+@keyframes bigPoofL9{0%{opacity:.72;transform:translate(0,1px) scale(.4)}100%{opacity:.46;transform:translate(-61px,25px) scale(1.85)}}
+
+.standard-action.deadlock-pulse{
+  animation:deadlockRestartPulseV32 1900ms ease-in-out infinite !important;
+}
+@keyframes deadlockRestartPulseV32{
+  0%,100%{
+    transform:scale(1);
+    background:transparent;
+    box-shadow:0 0 0 rgba(100,83,148,0);
+  }
+  50%{
+    transform:scale(1.025);
+    background:rgba(100,83,148,.13);
+    box-shadow:0 0 11px rgba(100,83,148,.32);
+  }
+}
+
+
+/* v3.3: stronger restart beacon and longer drifting smoke clearance. */
+.pressure-poof{
+  animation:pressureCloudLifeV33 4000ms linear forwards !important;
+}
+@keyframes pressureCloudLifeV33{
+  0%,25%{opacity:1;}
+  100%{opacity:0;}
+}
+.pressure-poof.poof-right i{
+  animation-duration:1450ms !important;
+}
+.pressure-poof.poof-left i{
+  animation-duration:1450ms !important;
+}
+/* Continue drifting the whole cloud outward and slightly upward during the 3-second clear. */
+.pressure-poof.poof-right{animation:pressureCloudDriftRight 4000ms ease-out forwards !important;}
+.pressure-poof.poof-left{animation:pressureCloudDriftLeft 4000ms ease-out forwards !important;}
+@keyframes pressureCloudDriftRight{
+  0%,25%{opacity:1;transform:translate(0,0);}
+  100%{opacity:0;transform:translate(42px,-18px);}
+}
+@keyframes pressureCloudDriftLeft{
+  0%,25%{opacity:1;transform:translate(0,0);}
+  100%{opacity:0;transform:translate(-42px,-18px);}
+}
+.standard-action.deadlock-pulse{
+  animation:deadlockRestartPulseV33 1700ms ease-in-out infinite !important;
+}
+@keyframes deadlockRestartPulseV33{
+  0%,100%{
+    transform:scale(1);
+    background:transparent;
+    color:inherit;
+    box-shadow:none;
+  }
+  50%{
+    transform:scale(1.035);
+    background:#fff;
+    color:#24282d;
+    box-shadow:none;
+  }
+}
+
+
+/* v3.4: simplified black win prompt with standard purple New Puzzle control. */
+#message{
+  background:#000 !important;
+  color:#fff !important;
+}
+#message h2{
+  margin:0 0 16px !important;
+  color:#fff !important;
+}
+#message button{
+  border:2px solid #645394 !important;
+  border-radius:10px !important;
+  background:transparent !important;
+  color:#645394 !important;
+  font-weight:700 !important;
+  min-height:36px;
+  padding:0 18px !important;
+}
+
+
+/* v3.5: center meter mirrors conveyor block colors. */
+#centerQueue .queueCell.occupied.c-pink{background:#ed5f9a;}
+#centerQueue .queueCell.occupied.c-blue{background:#4285d4;}
+#centerQueue .queueCell.occupied.c-orange{background:#e88934;}
+#centerQueue .queueCell.occupied.c-green{background:#36a765;}
+#centerQueue .queueCell.occupied.c-purple{background:#8c55b5;}
+#centerQueue .queueCell.occupied.c-yellow{background:#e0b936;}
+
+
+
+
+/* v4.2: one-shot whole-board shimmer for New Puzzle. */
+.board-shimmer{
+  position:absolute;
+  left:-8%;
+  width:116%;
+  height:46px;
+  top:calc(100% + 10px);
+  z-index:9500;
+  pointer-events:none;
+  opacity:0;
+  transform:scaleX(.82);
+  border-radius:50%;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(255,255,255,0) 0%,
+      rgba(255,255,255,.16) 18%,
+      rgba(255,255,255,.66) 39%,
+      rgba(255,255,255,1) 49%,
+      rgba(255,255,255,1) 51%,
+      rgba(255,255,255,.66) 61%,
+      rgba(255,255,255,.16) 82%,
+      rgba(255,255,255,0) 100%
+    );
+  box-shadow:
+    0 0 9px rgba(255,255,255,.70),
+    0 0 22px rgba(255,255,255,.32);
+}
+.board-shimmer.run{
+  animation:boardShimmerSweep 720ms cubic-bezier(.20,.72,.20,1) forwards;
+}
+@keyframes boardShimmerSweep{
+  0%{
+    top:calc(100% + 10px);
+    opacity:0;
+    transform:scaleX(.82);
+  }
+  10%{
+    opacity:1;
+    transform:scaleX(.94);
+  }
+  48%{
+    opacity:1;
+    transform:scaleX(1.04);
+  }
+  84%{
+    opacity:.9;
+    transform:scaleX(1);
+  }
+  100%{
+    top:-56px;
+    opacity:0;
+    transform:scaleX(.92);
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  .board-shimmer.run{animation-duration:1ms!important;}
+}
+
+</style>
+<style>
+/* v4.6 final responsive overrides */
+#appScaleCanvas #game{
+  width:520px !important;
+  max-width:520px !important;
+}
+#appScaleCanvas #boardWrap{
+  width:520px !important;
+  height:650px !important;
+}
+#appScaleCanvas .rack{
+  height:50px !important;
+  flex:0 0 50px !important;
+}
+</style>
+
+
+<style>
+/* v5.3 visual alignment: belt pieces match cubby-piece scale at every viewport. */
+#appScaleCanvas .beltPiece{
+  width:29px !important;
+  height:29px !important;
+  border-radius:5px !important;
+}
+</style>
+
+<style>
+/* v5.4: full-belt warning is now a brief angry wiggle instead of a popup/failure prompt. */
+#centerQueue.angry-wiggle .queueCell.occupied{
+  animation:centerBlockAngryWiggle 520ms ease-in-out both;
+}
+#centerQueue.angry-wiggle .queueCell.occupied:nth-child(2n){
+  animation-delay:35ms;
+}
+#centerQueue.angry-wiggle .queueCell.occupied:nth-child(3n){
+  animation-delay:70ms;
+}
+@keyframes centerBlockAngryWiggle{
+  0%,100%{ transform:translateX(0) rotate(0deg); }
+  12%{ transform:translateX(-4px) rotate(-2deg); }
+  24%{ transform:translateX(4px) rotate(2deg); }
+  36%{ transform:translateX(-5px) rotate(-2.4deg); }
+  48%{ transform:translateX(5px) rotate(2.4deg); }
+  60%{ transform:translateX(-4px) rotate(-1.8deg); }
+  72%{ transform:translateX(4px) rotate(1.8deg); }
+  84%{ transform:translateX(-2px) rotate(-1deg); }
+}
+@media (prefers-reduced-motion:reduce){
+  #centerQueue.angry-wiggle .queueCell.occupied{
+    animation-duration:1ms !important;
+  }
+}
+</style>
+
+<style>
+/* v5.8 overload loss: lightweight clones of blocks from incomplete cubbies only. */
+.overload-block-clone{
+  position:fixed;
+  z-index:9800;
+  pointer-events:none;
+  margin:0;
+  transform-origin:center;
+  will-change:transform,opacity;
+  backface-visibility:hidden;
+}
+.overload-source-hidden{
+  visibility:hidden !important;
+}
+</style>
+
+</head>
+<body>
+<div id="appScaleFrame">
+<div id="appScaleCanvas">
+<div class="standard-title-row">
+  <span></span>
+  <h1>Loop Organizer</h1>
+  <button class="standard-info" id="standardInfoBtn" type="button" aria-label="Info">?</button>
+</div>
+
+<div class="game-shell">
+<div id="game">
+<div id="boardWrap">
+    <div id="board">
+      <div id="leftRacks" class="rackcol"></div>
+      <div id="rightRacks" class="rackcol"></div>
+
+      <div id="loopFrame">
+        <div id="centerQueue" aria-label="Loop storage"></div>
+        <div id="belt"></div>
+      </div>
+
+      <div id="message">
+        <h2>Organized!</h2>
+        <button id="nextBtn">New Puzzle</button>
+      </div>
+      <div class="board-shimmer" id="boardShimmer" aria-hidden="true"></div>
+    </div>
+  </div>
+  <div class="restart-shimmer" id="restartShimmer" aria-hidden="true"></div>
+</div>
+
+<div class="standard-action-row">
+  <button type="button" class="standard-action" id="stdRestartBtn">Restart</button>
+</div>
+
+<div class="standard-home-row">
+  <a class="standard-home" href="../">Home</a>
+</div>
+</div>
+</div>
+
+<div class="info-window" id="help" role="dialog" aria-modal="false" aria-hidden="true">
+  <div class="info-card">
+    <div class="info-text">
+      Tap a cubby to send its front color onto the belt.<br>
+      Blocks automatically stack with matching colors.<br>
+      Sort every cubby into its correct color to win.
+    </div>
+  </div>
+</div>
+
+<script>
+(()=>{
+'use strict';
+
+const COLORS=['pink','blue','orange','green','purple','yellow'];
+const RACKS_PER_SIDE=10;
+const RACK_SIZE=5;
+const LOOP_LIMIT=12;
+const centerQueueCount=LOOP_LIMIT;
+
+const board=document.getElementById('board');
+const loopFrame=document.getElementById('loopFrame');
+const belt=document.getElementById('belt');
+const leftRacks=document.getElementById('leftRacks');
+const rightRacks=document.getElementById('rightRacks');
+const help=document.getElementById('help');
+const message=document.getElementById('message');
+
+let racks=[];
+let loop=[];
+let nextId=1;
+let running=true;
+let tickTimer=null;
+let lastTickTime=0;
+let loopGeometry=null;
+let incomingToLoop=0;
+let incomingColors=[];
+let finaleStarted=false;
+let finaleFinished=false;
+let circulationRAF=0;
+let circulationStart=0;
+let deadlockTimer=null;
+let deadlockSequenceToken=0;
+let deadlockTriggered=false;
+let gameGeneration=0;
+
+
+let seed=(Date.now()>>>0);
+
+function rand(){
+  seed=(seed*1664525+1013904223)>>>0;
+  return seed/4294967296;
+}
+function shuffle(a){
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(rand()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+
+function makePuzzle(){
+  gameGeneration++;
+  document.querySelectorAll('.overload-block-clone').forEach(el=>el.remove());
+  document.querySelectorAll('.overload-source-hidden').forEach(el=>el.classList.remove('overload-source-hidden'));
+
+  // Cancel all previous-board finale state before any new-board rendering.
+  finaleStarted=false;
+  finaleFinished=false;
+  circulationStart=0;
+  if(circulationRAF){
+    cancelAnimationFrame(circulationRAF);
+    circulationRAF=0;
+  }
+  loopFrame.classList.remove('finale-running','finale-flash','finale-circulation');
+  const oldCirculation=document.getElementById('circulationLoop');
+  if(oldCirculation) oldCirculation.remove();
+  const centerReset=document.getElementById('centerQueue');
+  if(centerReset) centerReset.classList.remove('finale-charge');
+
+  document.querySelectorAll('.flyingPiece').forEach(el=>el.remove());
+  const oldToast=document.getElementById('gameToast');
+  if(oldToast) oldToast.remove();
+  clearTimeout(flashHelp.t);
+  if(deadlockTimer){
+    clearTimeout(deadlockTimer);
+    deadlockTimer=null;
+  }
+  deadlockSequenceToken++;
+  deadlockTriggered=false;
+  document.querySelectorAll('.pressure-poof').forEach(el=>el.remove());
+  document.getElementById('centerQueue')?.classList.remove('deadlock-warning');
+  document.getElementById('stdRestartBtn')?.classList.remove('deadlock-pulse');
+
+  seed=(Date.now()>>>0);
+  nextId=1; loop=[]; racks=[]; incomingToLoop=0; incomingColors=[];
+  let bag=[];
+
+  // Count how many cubbies belong to each color.
+  const cubbyCounts=Object.fromEntries(COLORS.map(c=>[c,0]));
+  for(let side=0;side<2;side++){
+    for(let r=0;r<RACKS_PER_SIDE;r++){
+      const bg=COLORS[(r+side*2)%COLORS.length];
+      cubbyCounts[bg]++;
+    }
+  }
+
+  // Guarantee solvability: each cubby's final capacity is 5,
+  // so the total number of blocks of each color exactly matches
+  // the combined capacity of cubbies assigned to that color.
+  COLORS.forEach(c=>{
+    const needed=cubbyCounts[c]*RACK_SIZE;
+    for(let i=0;i<needed;i++) bag.push(c);
+  });
+
+  shuffle(bag);
+
+  let k=0;
+  for(let side=0;side<2;side++){
+    for(let r=0;r<RACKS_PER_SIDE;r++){
+      const bg=COLORS[(r+side*2)%COLORS.length];
+      const items=[];
+      for(let j=0;j<RACK_SIZE;j++){
+        items.push({id:nextId++,color:bag[k++]});
+      }
+      racks.push({side,r,bg,items,reserved:0,reservedColor:null,sealed:false,sealing:false,sealStartedAt:0,sealToken:0});
+    }
+  }
+
+  // Sanity check: block totals must exactly match cubby capacities by color.
+  const totals=Object.fromEntries(COLORS.map(c=>[c,0]));
+  racks.forEach(r=>r.items.forEach(item=>totals[item.color]++));
+  COLORS.forEach(c=>{
+    const expected=cubbyCounts[c]*RACK_SIZE;
+    if(totals[c]!==expected){
+      console.error('Color balance error',c,totals[c],expected);
+    }
+  });
+
+  renderRacks();
+  renderLoop();
+  updateStatus();
+  message.classList.remove('show');
+  running=true;
+  if(tickTimer) cancelAnimationFrame(tickTimer);
+  lastTickTime=performance.now();
+  loopGeometry=null;
+  tickTimer=requestAnimationFrame(tick);
+}
+
+
+function rackCanAccept(rack,color){
+  if(rack.sealed || rack.sealing) return false;
+  const used=rack.items.length+(rack.reserved||0);
+  if(used>=RACK_SIZE) return false;
+
+  // If pieces are already reserved/in-flight to this cubby, they define
+  // the exposed incoming stack color until they land.
+  if((rack.reserved||0)>0){
+    return rack.reservedColor===color;
+  }
+
+  // Empty cubbies prefer their own displayed color if that color is
+  // currently anywhere on the conveyor. If no matching-color block is
+  // on the belt, the empty cubby becomes wild and may accept anything.
+  if(rack.items.length===0){
+    const preferredColorOnBelt=loop.some(piece=>!piece.docking && piece.color===rack.bg);
+    return preferredColorOnBelt ? color===rack.bg : true;
+  }
+
+  // Otherwise ONLY the exposed/front block may be matched.
+  const frontColor=rack.items[rack.items.length-1].color;
+  return frontColor===color;
+}
+
+function renderRacks(){
+  leftRacks.innerHTML=''; rightRacks.innerHTML='';
+  racks.forEach((rack,idx)=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='rack r-'+rack.bg+(rack.items.length?'':' empty');
+    btn.setAttribute('aria-label',`Tray ${idx+1}, ${rack.items.length} blocks`);
+    btn.dataset.index=idx;
+
+    for(let visualIndex=0;visualIndex<RACK_SIZE;visualIndex++){
+      const slot=document.createElement('span');
+      slot.className='slot';
+
+      // items[0] is the oldest arrival and sits deepest in the cubby.
+      // Newer arrivals fill toward the conveyor/front.
+      const n=rack.items.length;
+      let item=null;
+      let itemIndex=-1;
+
+      if(rack.side===0){
+        // Left-side cubby: back is far left, front is far right.
+        if(visualIndex<n){
+          itemIndex=visualIndex;
+          item=rack.items[itemIndex];
+        }
+      }else{
+        // Right-side cubby: back is far right, front is far left.
+        if(visualIndex>=RACK_SIZE-n){
+          itemIndex=RACK_SIZE-1-visualIndex;
+          item=rack.items[itemIndex];
+        }
+      }
+
+      if(item){
+        const block=document.createElement('span');
+        block.className='block c-'+item.color;
+        // Front-most removable block is newest/current end of the filled run.
+        if(itemIndex===n-1) block.dataset.front='1';
+        slot.appendChild(block);
+      }
+      btn.appendChild(slot);
+    }
+    btn.addEventListener('click',()=>releaseFromRack(idx));
+    (rack.side===0?leftRacks:rightRacks).appendChild(btn);
+  });
+  requestAnimationFrame(()=>{
+    racks.forEach((rack,idx)=>{
+      if(!rack.sealed && !rack.sealing) return;
+      const el=document.querySelector(`.rack[data-index="${idx}"]`);
+      if(!el || el.querySelector('.rack-seal')) return;
+      el.classList.add('sealed-rack');
+      const seal=makeSealOverlay(el);
+      if(rack.sealed){
+        seal.classList.add('seal-static');
+      }else{
+        syncSealVisual(rack,seal);
+      }
+    });
+  });
+}
+
+function rackDockProgress(rack,geom=loopGeometry||refreshLoopGeometry()){
+  const frac=(rack.r+0.5)/RACKS_PER_SIDE;
+  const {topLen,sideLen,total}=geom;
+  if(rack.side===1) return (frac*sideLen)/total;
+  return (sideLen+topLen+(1-frac)*sideLen)/total;
+}
+
+function getAppScale(){
+  const canvas=document.getElementById('appScaleCanvas');
+  if(!canvas) return 1;
+  const rect=canvas.getBoundingClientRect();
+  return rect.width>0 ? rect.width/520 : 1;
+}
+
+function screenPointToBoard(x,y){
+  const boardRect=board.getBoundingClientRect();
+  const scale=getAppScale();
+  return {
+    x:(x-boardRect.left)/scale,
+    y:(y-boardRect.top)/scale
+  };
+}
+
+function loopLocalToScreen(x,y){
+  const lf=loopFrame.getBoundingClientRect();
+  const scale=getAppScale();
+  return {
+    x:lf.left+x*scale,
+    y:lf.top+y*scale
+  };
+}
+
+function makeFlyingPiece(color, fromRect, toX, toY, duration, done){
+  const ghost=document.createElement('div');
+  ghost.className='flyingPiece c-'+color;
+
+  // The game canvas is transform-scaled, but this flight ghost lives on <body>
+  // in viewport coordinates. Match the source block's ACTUAL rendered size
+  // rather than using the old unscaled 20px dimensions.
+  const renderedW=Math.max(1,fromRect.width);
+  const renderedH=Math.max(1,fromRect.height);
+  const startX=fromRect.left+renderedW/2;
+  const startY=fromRect.top+renderedH/2;
+
+  ghost.style.width=renderedW+'px';
+  ghost.style.height=renderedH+'px';
+  ghost.style.left=(startX-renderedW/2)+'px';
+  ghost.style.top=(startY-renderedH/2)+'px';
+  ghost.style.borderRadius=Math.max(2,6*getAppScale())+'px';
+
+  document.body.appendChild(ghost);
+
+  // Both endpoints are viewport coordinates, so the flight delta must stay
+  // in viewport pixels. Do NOT apply the game scale a second time here.
+  const dx=toX-startX;
+  const dy=toY-startY;
+
+  const anim=ghost.animate([
+    {transform:'translate3d(0,0,0) scale(1)',offset:0},
+    {transform:`translate3d(${dx*.42}px,${dy*.18}px,0) scale(1.08)`,offset:.42},
+    {transform:`translate3d(${dx}px,${dy}px,0) scale(1)`,offset:1}
+  ],{duration,easing:'cubic-bezier(.2,.75,.25,1)',fill:'forwards'});
+  anim.onfinish=()=>{ ghost.remove(); if(done) done(); };
+}
+
+
+
+function playFullBeltWiggle(){
+  const q=document.getElementById('centerQueue');
+  if(!q) return;
+  q.classList.remove('angry-wiggle');
+  void q.offsetWidth;
+  q.classList.add('angry-wiggle');
+  setTimeout(()=>q.classList.remove('angry-wiggle'),700);
+}
+
+function releaseFromRack(idx){
+  if(!running) return;
+  const generation=gameGeneration;
+  const rack=racks[idx];
+  if(!rack || rack.sealed || rack.sealing || !rack.items.length) return;
+
+  const firstColor=rack.items[rack.items.length-1].color;
+
+  // Release the contiguous same-color run at the front (array end).
+  let runCount=0;
+  for(let i=rack.items.length-1;i>=0;i--){
+    if(rack.items[i].color!==firstColor) break;
+    runCount++;
+  }
+
+  const freeSlots=LOOP_LIMIT-(loop.length+incomingToLoop);
+  if(freeSlots<=0){
+    playFullBeltWiggle();
+    return;
+  }
+
+  const releaseCount=Math.min(runCount,freeSlots);
+  const rackEl=document.querySelector(`.rack[data-index="${idx}"]`);
+  const frontBlock=rackEl?.querySelector('.block[data-front="1"]');
+  const baseRect=frontBlock ? frontBlock.getBoundingClientRect() : rackEl.getBoundingClientRect();
+
+  const departing=rack.items.splice(rack.items.length-releaseCount,releaseCount).reverse();
+  renderRacks();
+  updateStatus();
+
+  departing.forEach((item,order)=>{
+    incomingToLoop++;
+    incomingColors.push(item.color);
+    renderCenterMeter();
+
+    const progress=rackDockProgress(rack);
+    const [x,y]=perimeterPoint(progress);
+    const lf=loopFrame.getBoundingClientRect();
+    const targetScreen=loopLocalToScreen(x,y);
+    const tx=targetScreen.x, ty=targetScreen.y;
+
+    // Offset the starting rect slightly so the blocks visibly peel out in sequence.
+    const sourceRect={
+      left:baseRect.left,
+      top:baseRect.top,
+      width:baseRect.width,
+      height:baseRect.height
+    };
+
+    setTimeout(()=>{
+      if(generation!==gameGeneration) return;
+      makeFlyingPiece(item.color,sourceRect,tx,ty,210,()=>{
+        if(generation!==gameGeneration) return;
+        incomingToLoop=Math.max(0,incomingToLoop-1);
+        const incomingColorIndex=incomingColors.indexOf(item.color);
+        if(incomingColorIndex>=0) incomingColors.splice(incomingColorIndex,1);
+        loop.push({
+          id:item.id,
+          color:item.color,
+          progress,
+          age:0,
+          origin:idx,
+          docking:false,
+          arrivalSeq:item.id,
+          el:null
+        });
+        renderLoop();
+        updateStatus();
+      });
+    },order*90);
+  });
+}
+
+function refreshLoopGeometry(){
+  const w=loopFrame.clientWidth;
+  const h=loopFrame.clientHeight;
+  const pad=8;
+  const xL=pad, xR=w-pad, yT=pad, yB=h-pad;
+  const topLen=xR-xL, sideLen=yB-yT;
+  loopGeometry={w,h,pad,xL,xR,yT,yB,topLen,sideLen,total:2*topLen+2*sideLen};
+  return loopGeometry;
+}
+
+function perimeterPoint(t,geom=loopGeometry||refreshLoopGeometry()){
+  t=((t%1)+1)%1;
+  const {xL,xR,yT,yB,topLen,sideLen,total}=geom;
+  let d=t*total;
+  if(d<sideLen) return [xR,yT+d];
+  d-=sideLen;
+  if(d<topLen) return [xR-d,yB];
+  d-=topLen;
+  if(d<sideLen) return [xL,yB-d];
+  d-=sideLen;
+  return [xL+d,yT];
+}
+
+
+function forwardDistance(a,b){
+  return (b-a+1)%1;
+}
+
+function findDockRack(piece,previousProgress){
+  let best=null;
+  const traveled=forwardDistance(previousProgress,piece.progress);
+
+  racks.forEach((rack,idx)=>{
+    if(!rackCanAccept(rack,piece.color)) return;
+    if(piece.age<8 && idx===piece.origin) return;
+
+    const targetProgress=rackDockProgress(rack);
+    const toTarget=forwardDistance(previousProgress,targetProgress);
+
+    // Harsh catch:
+    // If the block reaches OR passes the cubby's exact horizontal centerline
+    // during this tick, the cubby grabs it immediately.
+    if(toTarget<=traveled+0.000001){
+      if(!best || toTarget<best.toTarget){
+        best={rack,idx,p:targetProgress,toTarget};
+      }
+    }
+  });
+
+  return best;
+}
+
+
+function getDockDuration(rack){
+  const active=Math.max(1,(rack.reserved||0));
+  // Single grabs are still readable, but a clump gets ripped in rapidly.
+  // 1=145ms, 2=105ms, 3=65ms, 4+=45ms.
+  return Math.max(45,145-(active-1)*40);
+}
+
+
+function rackIsCorrectlyComplete(rack){
+  return rack.items.length===RACK_SIZE &&
+         (rack.reserved||0)===0 &&
+         rack.items.every(item=>item.color===rack.bg);
+}
+
+function makeSealOverlay(rackEl){
+  const seal=document.createElement('div');
+  seal.className='rack-seal';
+  seal.innerHTML=`
+    <span class="strap h top"></span>
+    <span class="strap h bottom"></span>
+    <span class="strap v left"></span>
+    <span class="strap v right"></span>
+    <span class="glass"><i class="glass-shine"></i></span>
+    <span class="smoke"><i></i><i></i><i></i></span>
+  `;
+  rackEl.appendChild(seal);
+  return seal;
+}
+
+function applySealStage(seal,elapsed){
+  if(!seal || !seal.isConnected) return;
+  if(elapsed>=0) seal.classList.add('straps-out');
+  if(elapsed>=150) seal.classList.add('fold');
+  if(elapsed>=245) seal.classList.add('glass-in');
+  if(elapsed>=420) seal.classList.add('tight');
+  if(elapsed>=505) seal.classList.add('poof');
+}
+
+function syncSealVisual(rack,seal){
+  if(!rack || !rack.sealing || !seal) return;
+  const started=rack.sealStartedAt||performance.now();
+  const elapsed=Math.max(0,performance.now()-started);
+  applySealStage(seal,elapsed);
+
+  [150,245,420,505].forEach(ms=>{
+    if(elapsed>=ms) return;
+    setTimeout(()=>{
+      if(rack.sealing && seal.isConnected){
+        applySealStage(seal,ms);
+      }
+    },ms-elapsed);
+  });
+}
+
+function sealRackIfComplete(rack){
+  if(!rack || rack.sealed || rack.sealing || !rackIsCorrectlyComplete(rack)) return;
+
+  const idx=racks.indexOf(rack);
+  if(idx<0) return;
+
+  rack.sealing=true;
+  rack.sealStartedAt=performance.now();
+  rack.sealToken=(rack.sealToken||0)+1;
+
+  const token=rack.sealToken;
+  const generation=gameGeneration;
+  const rackEl=document.querySelector(`.rack[data-index="${idx}"]`);
+
+  if(rackEl){
+    rackEl.classList.add('sealed-rack');
+    const old=rackEl.querySelector('.rack-seal');
+    if(old) old.remove();
+    syncSealVisual(rack,makeSealOverlay(rackEl));
+  }
+
+  // The lock state finishes on its own timer, even if the rack DOM is
+  // recreated while other blocks are moving.
+  setTimeout(()=>{
+    if(generation!==gameGeneration) return;
+    if(racks[idx]!==rack) return;
+    if(rack.sealToken!==token || !rack.sealing) return;
+
+    rack.sealing=false;
+    rack.sealed=true;
+    rack.sealStartedAt=0;
+
+    renderRacks();
+    updateStatus();
+  },780);
+}
+
+function dockPiece(piece,target){
+  const generation=gameGeneration;
+  const rack = target.rack || (target.idx!=null ? racks[target.idx] : null);
+  if(!rack || !rackCanAccept(rack,piece.color)){
+return false;
+  }
+
+  if(piece.docking) return false;
+  piece.docking=true;
+
+  const beltEl=belt.querySelector(`[data-id="${piece.id}"]`);
+  const fromRect=beltEl ? beltEl.getBoundingClientRect() : loopFrame.getBoundingClientRect();
+  loop=loop.filter(p=>p.id!==piece.id);
+
+  // Reserve this seat immediately. This lets a whole same-color clump
+  // be caught while earlier blocks are still physically flying inward.
+  const reservedBefore=rack.reserved||0;
+  rack.reserved=reservedBefore+1;
+  if(reservedBefore===0) rack.reservedColor=piece.color;
+
+  const dockDuration=getDockDuration(rack);
+const rackEl=document.querySelector(`.rack[data-index="${target.idx}"]`);
+  const slots=rackEl ? [...rackEl.querySelectorAll('.slot')] : [];
+
+  // Each concurrently grabbed block gets its own pending seat instead
+  // of every in-flight block aiming at the same slot.
+  const seatNumber=rack.items.length+reservedBefore;
+  let visualIndex;
+  if(rack.side===0){
+    visualIndex=seatNumber;
+  }else{
+    visualIndex=RACK_SIZE-1-seatNumber;
+  }
+  visualIndex=Math.max(0,Math.min(RACK_SIZE-1,visualIndex));
+
+  const slot=slots[visualIndex];
+  const sr=slot ? slot.getBoundingClientRect() : rackEl.getBoundingClientRect();
+  const tx=sr.left+sr.width/2, ty=sr.top+sr.height/2;
+
+  renderLoop();
+  updateStatus();
+
+  makeFlyingPiece(piece.color,fromRect,tx,ty,dockDuration,()=>{
+    if(generation!==gameGeneration) return;
+    rack.reserved=Math.max(0,(rack.reserved||1)-1);
+    rack.items.push({id:piece.id,color:piece.color});
+
+    // Keep the reservation color locked until the final in-flight block
+    // of the clump has seated.
+    if(rack.reserved===0) rack.reservedColor=null;
+renderRacks();
+    renderLoop();
+    updateStatus();
+
+    // After the fifth correct block seats, seal the completed cubby.
+    requestAnimationFrame(()=>sealRackIfComplete(rack));
+  });
+
+  return true;
+}
+
+function tick(now){
+  if(!running){
+    tickTimer=null;
+    return;
+  }
+
+  if(!lastTickTime) lastTickTime=now;
+  const dt=Math.min(50,Math.max(0,now-lastTickTime));
+  lastTickTime=now;
+
+  // Preserve v2.1's exact conveyor rate: 0.013915 progress per 70 ms.
+  const progressStep=0.013915*(dt/70);
+  const ageStep=dt/70;
+
+  refreshLoopGeometry();
+  const snapshot=[...loop];
+
+  for(const p of snapshot){
+    if(p.docking) continue;
+
+    const previousProgress=p.progress;
+    p.progress=(p.progress+progressStep)%1;
+    p.age=(p.age||0)+ageStep;
+
+    const target=findDockRack(p,previousProgress);
+    if(target){
+      p.progress=target.p;
+      positionLoopPieces(false);
+      dockPiece(p,target);
+      continue;
+    }
+  }
+
+  positionLoopPieces(false);
+  tickTimer=requestAnimationFrame(tick);
+}
+
+function renderCenterMeter(){
+  const q=document.getElementById('centerQueue');
+  if(!q || finaleStarted) return;
+
+  q.innerHTML='';
+
+  // Each occupied meter cell represents one actual conveyor-capacity slot.
+  // Existing belt pieces come first, followed by blocks currently flying in.
+  const meterColors=[
+    ...loop.slice(0,LOOP_LIMIT).map(piece=>piece.color),
+    ...incomingColors
+  ].slice(0,LOOP_LIMIT);
+
+  for(let i=0;i<centerQueueCount;i++){
+    const cell=document.createElement('div');
+    const color=meterColors[i];
+    cell.className='queueCell'+(color?' occupied c-'+color:'');
+    q.appendChild(cell);
+  }
+}
+
+function renderLoop(){
+  const liveIds=new Set(loop.map(p=>String(p.id)));
+
+  [...belt.children].forEach(el=>{
+    if(!liveIds.has(el.dataset.id)) el.remove();
+  });
+
+  loop.forEach(p=>{
+    let el=p.el;
+    if(!el || !el.isConnected){
+      el=document.createElement('div');
+      el.className='beltPiece c-'+p.color;
+      el.dataset.id=p.id;
+      belt.appendChild(el);
+      p.el=el;
+    }
+  });
+
+  refreshLoopGeometry();
+  positionLoopPieces(false);
+
+  renderCenterMeter();
+}
+
+function positionLoopPieces(refreshGeometry=true){
+  const geom=refreshGeometry ? refreshLoopGeometry() : (loopGeometry||refreshLoopGeometry());
+  loop.forEach(p=>{
+    let el=p.el;
+    if(!el || !el.isConnected){
+      el=document.createElement('div');
+      el.className='beltPiece c-'+p.color;
+      el.dataset.id=p.id;
+      belt.appendChild(el);
+      p.el=el;
+    }
+    const [x,y]=perimeterPoint(p.progress,geom);
+    el.style.transform=`translate3d(${x}px,${y}px,0) translate(-50%,-50%)`;
+  });
+}
+
+
+function sleep(ms){
+  return new Promise(resolve=>setTimeout(resolve,ms));
+}
+
+function allCubbiesSealed(){
+  return racks.length>0 && racks.every(r=>r.sealed && !r.sealing);
+}
+
+function buildFinaleMeter(){
+  const q=document.getElementById('centerQueue');
+  if(!q) return [];
+  q.innerHTML='';
+  q.classList.add('finale-charge');
+  const cells=[];
+  for(let i=0;i<centerQueueCount;i++){
+    const cell=document.createElement('div');
+    cell.className='queueCell';
+    q.appendChild(cell);
+    cells.push(cell);
+  }
+  return cells;
+}
+
+function createCirculationLoop(){
+  let layer=document.getElementById('circulationLoop');
+  if(layer) layer.remove();
+
+  layer=document.createElement('div');
+  layer.id='circulationLoop';
+
+  for(let i=0;i<12;i++){
+    const dot=document.createElement('span');
+    dot.className='circulationDot';
+    dot.dataset.offset=String(i/12);
+    layer.appendChild(dot);
+  }
+  loopFrame.appendChild(layer);
+
+  circulationStart=performance.now();
+
+  const animate=(now)=>{
+    if(!finaleStarted || !layer.isConnected){
+      circulationRAF=0;
+      return;
+    }
+
+    // Slow, mechanical circulation around the exact existing belt path.
+    const base=((now-circulationStart)/3600)%1;
+    layer.querySelectorAll('.circulationDot').forEach(dot=>{
+      const offset=Number(dot.dataset.offset)||0;
+      const progress=(base+offset)%1;
+      const [x,y]=perimeterPoint(progress);
+      dot.style.left=x+'px';
+      dot.style.top=y+'px';
+    });
+
+    circulationRAF=requestAnimationFrame(animate);
+  };
+
+  circulationRAF=requestAnimationFrame(animate);
+  requestAnimationFrame(()=>layer.classList.add('show'));
+  return layer;
+}
+
+async function beginFinale(){
+  if(finaleStarted || finaleFinished) return;
+  const generation=gameGeneration;
+  finaleStarted=true;
+  running=false;
+  if(tickTimer){
+    cancelAnimationFrame(tickTimer);
+    tickTimer=null;
+  }
+  lastTickTime=0;
+loopFrame.classList.add('finale-running');
+
+  // Stage 1: generator meter charges green one cell at a time.
+  const cells=buildFinaleMeter();
+  for(let i=0;i<cells.length;i++){
+    cells[i].classList.add('finale-on');
+    await sleep(82);
+    if(generation!==gameGeneration) return;
+  }
+
+  await sleep(160);
+  if(generation!==gameGeneration) return;
+
+  // Stage 2: one strong white ignition flash, then a slow fade back down.
+  loopFrame.classList.add('finale-flash');
+  await sleep(1180);
+  if(generation!==gameGeneration) return;
+  loopFrame.classList.remove('finale-flash');
+
+  // Stage 3: machinery remains fully visible.
+  loopFrame.classList.add('finale-circulation');
+
+  // Stage 4: 12 hollow white markers continuously circulate around the belt.
+  createCirculationLoop();
+
+  // The circulation keeps running. This delay only controls when the win
+  // window appears.
+  await sleep(1000);
+  if(generation!==gameGeneration) return;
+
+  finaleFinished=true;
+// Do NOT cancel circulation here — it continues behind the Game Won window.
+  message.classList.add('show');
+}
+
+function deadlockCondition(){
+  if(finaleStarted || finaleFinished || deadlockTriggered) return false;
+
+  // v3.0: use the center meter itself as the sole failure detector.
+  // If all 12 meter cells stay occupied continuously for 5 seconds,
+  // the pressure-release sequence fires. Any drop below 12 resets it.
+  const used=loop.length+incomingToLoop;
+  return used>=LOOP_LIMIT;
+}
+
+
+function explodeIncompleteCubbyBlocks(){
+  const generation=gameGeneration;
+  const viewportH=Math.max(window.innerHeight,document.documentElement.clientHeight||0);
+  const clones=[];
+
+  racks.forEach((rack,idx)=>{
+    // Leave completed/sealed cubbies completely untouched.
+    if(!rack || rack.sealed || rack.sealing || rackIsCorrectlyComplete(rack)) return;
+
+    const rackEl=document.querySelector(`.rack[data-index="${idx}"]`);
+    if(!rackEl) return;
+
+    // Only clone real cubby blocks. Belt pieces and center meter cells are outside .rack.
+    const blocks=[...rackEl.querySelectorAll('.piece, .rackPiece, .block')].filter(el=>{
+      return !el.closest('.rack-seal');
+    });
+
+    blocks.forEach((block,blockIndex)=>{
+      const rect=block.getBoundingClientRect();
+      if(rect.width<=0 || rect.height<=0) return;
+
+      const clone=block.cloneNode(true);
+      clone.classList.add('overload-block-clone');
+      clone.removeAttribute('id');
+      clone.style.left=rect.left+'px';
+      clone.style.top=rect.top+'px';
+      clone.style.width=rect.width+'px';
+      clone.style.height=rect.height+'px';
+      clone.style.transform='translate3d(0,0,0) rotate(0deg)';
+      document.body.appendChild(clone);
+      clones.push(clone);
+
+      block.classList.add('overload-source-hidden');
+
+      // Launch mostly inward toward the center of the board, with enough
+      // randomness to keep the burst messy rather than perfectly mirrored.
+      const centerX=rect.left+rect.width/2;
+      const boardCenterX=window.innerWidth/2;
+      const inwardDir=centerX < boardCenterX ? 1 : -1;
+      const dx=inwardDir*(24+Math.random()*58)+(Math.random()-0.5)*30;
+
+      // Slower initial burst and a longer, gentler rain-down.
+      const rise=55+Math.random()*95;
+      const fall=viewportH-rect.top+90+Math.random()*125;
+      const rot=(Math.random()>.5?1:-1)*(180+Math.random()*460);
+      const launchTime=520+Math.random()*180;
+      const totalTime=1500+Math.random()*500;
+      const delay=Math.random()*180;
+
+      const apexOffset=Math.min(.24,launchTime/totalTime);
+      const anim=clone.animate([
+        {
+          transform:'translate3d(0,0,0) rotate(0deg)',
+          opacity:1,
+          offset:0,
+          easing:'cubic-bezier(.18,.62,.28,1)'
+        },
+        {
+          transform:`translate3d(${dx*.58}px,${-rise}px,0) rotate(${rot*.34}deg)`,
+          opacity:1,
+          offset:apexOffset,
+          easing:'linear'
+        },
+        {
+          transform:`translate3d(${dx}px,${fall}px,0) rotate(${rot}deg)`,
+          opacity:.96,
+          offset:1
+        }
+      ],{
+        duration:totalTime,
+        delay,
+        easing:'linear',
+        fill:'forwards'
+      });
+
+      anim.onfinish=()=>clone.remove();
+    });
+  });
+
+  // Remove only the temporary flying clones after they leave the screen.
+  // The original blocks stay hidden for the rest of the loss state and are
+  // restored by makePuzzle() when Restart creates the next board.
+  setTimeout(()=>{
+    clones.forEach(el=>el.remove());
+  },2400);
+}
+
+function burstAllCubbies(){
+  const boardRect=board.getBoundingClientRect();
+  board.classList.add('pressure-release');
+
+  document.querySelectorAll('.rack').forEach((rackEl,index)=>{
+    const rect=rackEl.getBoundingClientRect();
+    const puff=document.createElement('span');
+    puff.className='pressure-poof';
+
+    const isLeft=rackEl.closest('#leftRacks')!==null;
+    puff.classList.add(isLeft?'poof-right':'poof-left');
+    const scale=getAppScale();
+    puff.style.left=((isLeft ? rect.right-boardRect.left : rect.left-boardRect.left)/scale-4)+'px';
+    puff.style.top=((rect.top-boardRect.top+rect.height/2)/scale-4)+'px';
+    puff.innerHTML='<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>';
+    board.appendChild(puff);
+
+    setTimeout(()=>puff.remove(),4150+index*2);
+  });
+
+  setTimeout(()=>board.classList.remove('pressure-release'),4200);
+}
+
+function cancelDeadlockWatch(){
+  if(deadlockTimer){
+    clearTimeout(deadlockTimer);
+    deadlockTimer=null;
+  }
+  deadlockSequenceToken++;
+  deadlockTriggered=false;
+
+  const q=document.getElementById('centerQueue');
+  if(q){
+    q.classList.remove('deadlock-warning','angry-wiggle');
+  }
+  document.getElementById('stdRestartBtn')?.classList.remove('deadlock-pulse');
+}
+
+function updateDeadlockWatch(){
+  if(deadlockTriggered) return;
+
+  if(!deadlockCondition()){
+    cancelDeadlockWatch();
+    return;
+  }
+  if(deadlockTimer) return;
+
+  const generation=gameGeneration;
+  const token=++deadlockSequenceToken;
+  deadlockTimer=setTimeout(async()=>{
+    deadlockTimer=null;
+    if(generation!==gameGeneration || token!==deadlockSequenceToken || !deadlockCondition()) return;
+
+    deadlockTriggered=true;
+    const q=document.getElementById('centerQueue');
+    if(q){
+      q.classList.remove('deadlock-warning');
+      void q.offsetWidth;
+      q.classList.add('deadlock-warning');
+    }
+
+    await sleep(1850);
+    if(generation!==gameGeneration || token!==deadlockSequenceToken) return;
+
+    burstAllCubbies();
+    await sleep(1000);
+    if(generation!==gameGeneration || token!==deadlockSequenceToken) return;
+    explodeIncompleteCubbyBlocks();
+
+    // Preserve the original overall smoke-to-Restart timing.
+    await sleep(3100);
+    if(generation!==gameGeneration || token!==deadlockSequenceToken) return;
+
+    document.getElementById('stdRestartBtn')?.classList.add('deadlock-pulse');
+  },7000);
+}
+
+function checkSolved(){
+  if(finaleStarted || finaleFinished) return;
+
+  // The generator finale begins only after every cubby has actually
+  // completed its strap/glass sealing animation.
+  if(loop.length || incomingToLoop) return;
+  if(!allCubbiesSealed()) return;
+
+  beginFinale();
+}
+
+function updateStatus(){
+  renderCenterMeter();
+  checkSolved();
+  updateDeadlockWatch();
+}
+
+function flashHelp(txt){
+  let toast=document.getElementById('gameToast');
+  if(!toast){
+    toast=document.createElement('div');
+    toast.id='gameToast';
+    toast.className='game-toast';
+    const shell=document.querySelector('.game-shell');
+    (shell||document.body).appendChild(toast);
+  }
+  toast.textContent=txt;
+  toast.classList.remove('show');
+  void toast.offsetWidth;
+  toast.classList.add('show');
+  clearTimeout(flashHelp.t);
+  flashHelp.t=setTimeout(()=>toast.classList.remove('show'),1500);
+}
+
+function hint(){
+  if(!running) return;
+
+  let best=null;
+  racks.forEach((r,idx)=>{
+    if(!r.items.length) return;
+    const c=r.items[r.items.length-1].color;
+    let score=0;
+    racks.forEach((dest,didx)=>{
+      if(didx!==idx && rackCanAccept(dest,c)) score++;
+    });
+    if(!best || score>best.score) best={type:'rack',idx,c,score};
+  });
+
+
+  if(!best) return;
+  const el=document.querySelector(`.rack[data-index="${best.idx}"]`);
+  if(el) el.animate([{transform:'scale(1)'},{transform:'scale(1.05)'},{transform:'scale(1)'}],{duration:620,iterations:2});
+  flashHelp(best.score>0?'This front block has somewhere legal to go.':'No obvious legal destination yet.');
+}
+
+function playBoardShimmer(){
+  const shimmer=document.getElementById('boardShimmer');
+  if(!shimmer) return;
+  shimmer.classList.remove('run');
+  void shimmer.offsetWidth;
+  shimmer.classList.add('run');
+  setTimeout(()=>shimmer.classList.remove('run'),780);
+}
+
+const nextBtn=document.getElementById('nextBtn');
+if(nextBtn){
+  nextBtn.addEventListener('click',()=>{
+    makePuzzle();
+    requestAnimationFrame(playBoardShimmer);
+  });
+}
+
+window.addEventListener('resize',()=>{
+  loopGeometry=null;
+  positionLoopPieces();
+});
+
+// Expose only the small hooks needed by the standard outer layout controls.
+window.organizationLoopRestart=makePuzzle;
+window.organizationLoopRefreshGeometry=()=>{
+  loopGeometry=null;
+  positionLoopPieces();
+};
+
+makePuzzle();
+})();
+
+
+
+// Standard Game Layout controls
+const stdInfoBtn=document.getElementById('standardInfoBtn');
+const infoWindow=document.getElementById('help');
+
+if(stdInfoBtn && infoWindow){
+  stdInfoBtn.addEventListener('click',()=>{
+    const opening=!infoWindow.classList.contains('show');
+    infoWindow.classList.toggle('show',opening);
+    infoWindow.setAttribute('aria-hidden',opening?'false':'true');
+  });
+
+  infoWindow.addEventListener('click',(e)=>{
+    if(e.target===infoWindow){
+      infoWindow.classList.remove('show');
+      infoWindow.setAttribute('aria-hidden','true');
+    }
+  });
+}
+
+function playRestartShimmer(){
+  const shimmer=document.getElementById('restartShimmer');
+  if(!shimmer) return;
+  shimmer.classList.remove('run');
+  void shimmer.offsetWidth;
+  shimmer.classList.add('run');
+  setTimeout(()=>shimmer.classList.remove('run'),620);
+}
+
+const stdRestartBtn=document.getElementById('stdRestartBtn');
+if(stdRestartBtn){
+  stdRestartBtn.addEventListener('click',()=>{
+    if(typeof window.organizationLoopRestart==='function'){
+      window.organizationLoopRestart();
+      playRestartShimmer();
+    }
+  });
+}
+
+
+function updateWholeGameScale(){
+  const root=document.documentElement;
+  const frame=document.getElementById('appScaleFrame');
+  const canvas=document.getElementById('appScaleCanvas');
+  if(!frame || !canvas) return;
+
+  const baseW=520;
+
+  // Measure the fixed design canvas at native size.
+  root.style.setProperty('--app-scale','1');
+  canvas.style.transform='scale(1)';
+  frame.style.width=baseW+'px';
+  frame.style.height='auto';
+
+  const baseH=Math.max(1,canvas.scrollHeight);
+  const viewportW=Math.max(1,document.documentElement.clientWidth);
+  const viewportH=Math.max(1,window.innerHeight);
+
+  const widthScale=(viewportW-8)/baseW;
+  const heightScale=(viewportH-8)/baseH;
+
+  // Preserve the 10% breathing room from v4.7+.
+  const scale=Math.max(0.2,Math.min(1,widthScale,heightScale)*0.90);
+
+  root.style.setProperty('--app-scale',String(scale));
+  canvas.style.transform=`scale(${scale})`;
+
+  // The outer frame exactly matches the transformed footprint.
+  // Because the frame itself is margin:auto, the visible game is truly centered.
+  frame.style.width=(baseW*scale)+'px';
+  frame.style.height=(baseH*scale)+'px';
+
+  requestAnimationFrame(()=>{
+    if(typeof window.organizationLoopRefreshGeometry==='function'){
+      window.organizationLoopRefreshGeometry();
+    }
+  });
+}
+
+let scaleRAF=0;
+function scheduleWholeGameScale(){
+  cancelAnimationFrame(scaleRAF);
+  scaleRAF=requestAnimationFrame(updateWholeGameScale);
+}
+window.addEventListener('resize',scheduleWholeGameScale);
+window.addEventListener('orientationchange',scheduleWholeGameScale);
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize',scheduleWholeGameScale);
+}
+requestAnimationFrame(updateWholeGameScale);
+
+
+</script>
+
+
+</div>
+
+</body>
+</html>
+
