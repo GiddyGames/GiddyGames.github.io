@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <!--
   Casual Games Hub
-  v1.5
+  v1.6
   
   Changelog:
+  v1.6 - Added Greebledoku
   v1.5 - Added Loop Organizer
   v1.4 - Added Tangle Match
   v1.3 - Added Learn Morse Code
@@ -62,7 +63,7 @@
   }
   .thumb{
     width:100%;
-    aspect-ratio:1.8/1;
+    aspect-ratio:1/1;
     background:var(--placeholder-color, linear-gradient(135deg,#2a2e3a,#1b1e26));
     display:flex;
     align-items:center;
@@ -106,11 +107,12 @@
   const GAMES = [
     { title: "Sort Stack",              path: "sort-stack/",              thumb: "", color: "linear-gradient(135deg,#ff6b6b,#c0392b)", emoji: "🧱" },
     { title: "Slide Match",             path: "slide-match/",             thumb: "", color: "linear-gradient(135deg,#8e6bff,#5b3fd9)", emoji: "🧩" },
-    { title: "Lane Chomper",            path: "lane-chomper/",            thumb: "", color: "linear-gradient(135deg,#f39c12,#d68910)", emoji: "◀◀" },
+    { title: "Lane Chomper",            path: "lane-chomper/",            thumb: "", color: "linear-gradient(135deg,#f39c12,#d68910)", emoji: "◀◀", iconColor: "#ffffff" },
     { title: "Constellation Connections", path: "constellation-game/",     thumb: "", color: "linear-gradient(135deg,#1abc9c,#0d5c4a)", emoji: "⭐" },
     { title: "Learn Morse Code",        path: "learn-morse-code/",        thumb: "", color: "linear-gradient(135deg,#e74c3c,#c0392b)", emoji: "📡" },
     { title: "Tangle Match",            path: "tangle-match/",            thumb: "", color: "linear-gradient(135deg,#e056fd,#9b2fae)", emoji: "🪢" },
     { title: "Loop Organizer",          path: "loop-organizer/",          thumb: "", color: "linear-gradient(135deg,#2ecc71,#1a7f4a)", emoji: "🔁" },
+    { title: "Greebledoku",             path: "greebledoku/",             thumb: "", color: "linear-gradient(135deg,#636e72,#2d3436)", emoji: "👾" },
   ];
   // -----------------------------
 
@@ -124,6 +126,7 @@
     const thumb = document.createElement('div');
     thumb.className = 'thumb';
     if(game.color) thumb.style.setProperty('--placeholder-color', game.color);
+    if(game.iconColor) thumb.style.color = game.iconColor;
 
     if(game.thumb){
       const img = document.createElement('img');
